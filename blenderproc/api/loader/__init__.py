@@ -3,6 +3,7 @@ from blenderproc.python.loader.BlendLoader import load_blend
 from blenderproc.python.loader.BopLoader import load_bop_objs, load_bop_scene, load_bop_intrinsics
 from blenderproc.python.loader.CCMaterialLoader import load_ccmaterials
 from blenderproc.python.loader.Front3DLoader import load_front3d
+from blenderproc.python.loader.Front3DLoader import load_front3d_floors_split_by_room
 from blenderproc.python.loader.HavenMaterialLoader import load_haven_mat
 from blenderproc.python.loader.IKEALoader import load_ikea
 from blenderproc.python.loader.ObjectLoader import load_obj

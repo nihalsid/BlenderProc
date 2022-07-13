@@ -166,6 +166,8 @@ def render_segmap(output_dir: Optional[str] = None, temp_dir: Optional[str] = No
                             # if the current object has a custom property with that name -> get it
                             elif current_attribute.startswith("cp_") and attribute in current_obj:
                                 value = current_obj[attribute]
+                            elif attribute in current_obj:
+                                value = current_obj[attribute]
                             elif current_attribute.startswith("cf_"):
                                 if current_attribute == "cf_basename":
                                     value = current_obj.name

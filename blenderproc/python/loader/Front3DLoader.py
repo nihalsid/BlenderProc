@@ -16,6 +16,48 @@ from blenderproc.python.loader.ObjectLoader import load_obj
 from blenderproc.python.loader.TextureLoader import load_texture
 
 
+
+def load_front3d_floors_split_by_room(json_path: str, future_model_path: str):
+
+    """ Loads the 3D-Front scene specified by the given json file.
+
+    :param json_path: Path to the json file, where the house information is stored.
+    :param future_model_path: Path to the models used in the 3D-Front dataset.
+    :return: The list of loaded mesh objects.
+    """
+    json_path = resolve_path(json_path)
+    future_model_path = resolve_path(future_model_path)
+
+    if not os.path.exists(json_path):
+        raise Exception("The given path does not exists: {}".format(json_path))
+    if not json_path.endswith(".json"):
+        raise Exception("The given path does not point to a .json file: {}".format(json_path))
+    if not os.path.exists(future_model_path):
+        raise Exception("The 3D future model path does not exist: {}".format(future_model_path))
+
+    # load data from json file
+    with open(json_path, "r") as json_file:
+        data = json.load(json_file)
+
+    if "scene" not in data:
+        raise Exception("There is no scene data in this json file: {}".format(json_path))
+
+    rooms = data["scene"]["room"]
+
+    roomwise_created_objects = {room['instanceid']: [] for room in rooms}
+
+    for room in rooms:
+        created_objects = Front3DLoader._create_floor_mesh_objects_from_file(data, room)
+        roomwise_created_objects[room['instanceid']].extend(created_objects)
+
+    # add an identifier to the obj
+    for room_name in roomwise_created_objects:
+        for obj in roomwise_created_objects[room_name]:
+            obj.set_cp("is_3d_front", True)
+
+    return roomwise_created_objects
+
+
 def load_front3d(json_path: str, future_model_path: str, front_3D_texture_path: str, label_mapping: LabelIdMapping,
                  ceiling_light_strength: float = 0.8, lamp_light_strength: float = 7.0) -> List[MeshObject]:
     """ Loads the 3D-Front scene specified by the given json file.
@@ -53,11 +95,14 @@ def load_front3d(json_path: str, future_model_path: str, front_3D_texture_path: 
 
     created_objects += Front3DLoader._move_and_duplicate_furniture(data, all_loaded_furniture)
 
+    Front3DLoader._assign_room_attribute(created_objects, data)
+
     # add an identifier to the obj
     for obj in created_objects:
         obj.set_cp("is_3d_front", True)
 
     return created_objects
+
 
 class Front3DLoader:
     """ Loads the 3D-Front dataset.
@@ -118,8 +163,81 @@ class Front3DLoader:
         return ret_used_image
 
     @staticmethod
+    def _create_floor_mesh_objects_from_file(data: dict, room: dict) -> List[MeshObject]:
+        created_objects = []
+
+        valid_children_refs = None
+        if room is not None:
+            valid_children_refs = [rc['ref'] for rc in room['children']]
+
+        for mesh_data in data["mesh"]:
+            if mesh_data["type"] != "Floor":
+                continue
+            if valid_children_refs is not None and mesh_data['uid'] not in valid_children_refs:
+                continue
+            # extract the obj name, which also is used as the category_id name
+            used_obj_name = mesh_data["type"].strip()
+            if used_obj_name == "":
+                used_obj_name = "void"
+            # create a new mesh
+            obj = create_with_empty_mesh(used_obj_name, used_obj_name + "_mesh")
+            created_objects.append(obj)
+            # set two custom properties, first that it is a 3D_future object and second the category_id
+            obj.set_cp("is_3D_future", True)
+            # extract the vertices from the mesh_data
+            vert = [float(ele) for ele in mesh_data["xyz"]]
+            # extract the faces from the mesh_data
+            faces = mesh_data["faces"]
+            # extract the normals from the mesh_data
+            normal = [float(ele) for ele in mesh_data["normal"]]
+
+            # map those to the blender coordinate system
+            num_vertices = int(len(vert) / 3)
+            vertices = np.reshape(np.array(vert), [num_vertices, 3])
+            normal = np.reshape(np.array(normal), [num_vertices, 3])
+            # flip the first and second value
+            vertices[:, 1], vertices[:, 2] = vertices[:, 2], vertices[:, 1].copy()
+            normal[:, 1], normal[:, 2] = normal[:, 2], normal[:, 1].copy()
+            # reshape back to a long list
+            vertices = np.reshape(vertices, [num_vertices * 3])
+            normal = np.reshape(normal, [num_vertices * 3])
+
+            # add this new data to the mesh object
+            mesh = obj.get_mesh()
+            mesh.vertices.add(num_vertices)
+            mesh.vertices.foreach_set("co", vertices)
+            mesh.vertices.foreach_set("normal", normal)
+
+            # link the faces as vertex indices
+            num_vertex_indicies = len(faces)
+            mesh.loops.add(num_vertex_indicies)
+            mesh.loops.foreach_set("vertex_index", faces)
+
+            # the loops are set based on how the faces are a ranged
+            num_loops = int(num_vertex_indicies / 3)
+            mesh.polygons.add(num_loops)
+            # always 3 vertices form one triangle
+            loop_start = np.arange(0, num_vertex_indicies, 3)
+            # the total size of each triangle is therefore 3
+            loop_total = [3] * num_loops
+            mesh.polygons.foreach_set("loop_start", loop_start)
+            mesh.polygons.foreach_set("loop_total", loop_total)
+
+            # this update converts the upper data into a mesh
+            mesh.update()
+
+            # the generation might fail if the data does not line up
+            # this is not used as even if the data does not line up it is still able to render the objects
+            # We assume that not all meshes in the dataset do conform with the mesh standards set in blender
+            result = mesh.validate(verbose=False)
+            if result:
+               raise Exception("The generation of the mesh: {} failed!".format(used_obj_name))
+
+        return created_objects
+
+    @staticmethod
     def _create_mesh_objects_from_file(data: dict, front_3D_texture_path: str, ceiling_light_strength: float,
-                                       label_mapping: LabelIdMapping, json_path: str) -> List[MeshObject]:
+                                       label_mapping: LabelIdMapping, json_path: str, room: dict = None) -> List[MeshObject]:
         """
         This creates for a given data json block all defined meshes and assigns the correct materials.
         This means that the json file contains some mesh, like walls and floors, which have to built up manually.
@@ -147,8 +265,15 @@ class Front3DLoader:
         used_materials_based_on_color = {}
         # materials based on texture to avoid recreating the same material over and over
         used_materials_based_on_texture = {}
+
+        valid_children_refs = None
+        if room is not None:
+            valid_children_refs = [rc['ref'] for rc in room['children']]
+
         for mesh_data in data["mesh"]:
             # extract the obj name, which also is used as the category_id name
+            if valid_children_refs is not None and mesh_data['uid'] not in valid_children_refs:
+                continue
             used_obj_name = mesh_data["type"].strip()
             if used_obj_name == "":
                 used_obj_name = "void"
@@ -162,6 +287,7 @@ class Front3DLoader:
             # set two custom properties, first that it is a 3D_future object and second the category_id
             obj.set_cp("is_3D_future", True)
             obj.set_cp("category_id", label_mapping.id_from_label(used_obj_name.lower()))
+            obj.set_cp("uid_mesh", mesh_data['uid'])
 
             # get the material uid of the current mesh data
             current_mat = mesh_data["material"]
@@ -375,6 +501,17 @@ class Front3DLoader:
             elif "7e101ef3-7722-4af8-90d5-7c562834fabd" in obj_file:
                 warnings.warn(f"This file {obj_file} was skipped as it can not be read by blender.")
         return all_objs
+
+    @staticmethod
+    def _assign_room_attribute(objects, data):
+        for room_id, room in enumerate(data["scene"]["room"]):
+            for child in room["children"]:
+                for obj in objects:
+                    if (obj.has_cp('uid') and obj.get_cp("uid") == child["ref"]) or (obj.has_cp('uid_mesh') and obj.get_cp("uid_mesh") == child["ref"]):
+                        obj.set_cp("room_name", room["instanceid"])
+        for obj in objects:
+            if not obj.has_cp("room_name"):
+                obj.set_cp("room_name", "void")
 
     @staticmethod
     def _move_and_duplicate_furniture(data: dict, all_loaded_furniture: list) -> List[MeshObject]:
