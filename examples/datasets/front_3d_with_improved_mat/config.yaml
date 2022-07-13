@@ -17,7 +17,7 @@
           "diffuse_bounces": 200,
           "glossy_bounces": 200,
           "transmission_bounces": 200,
-          "transparency_bounces": 200
+          "transparency_bounces": 200,
         }
       }
     },
@@ -136,7 +136,7 @@
       "config": {
         "cam_poses": [
           {
-            "number_of_samples": 10,
+            "number_of_samples": 400,
             "min_interest_score": 0.15,
             "proximity_checks": {
               "min": 1.0,
@@ -144,7 +144,7 @@
                 "min": 2.5,
                 "max": 3.5,
               },
-              "no_background": True
+              "no_background": False #True
             },
             "location": {
               "provider":"sampler.Uniform3d",
@@ -167,13 +167,22 @@
       "config": {
         "output_key": "colors",
         "samples": 350,
-        "render_normals": True
+        "render_normals": True,
+        "render_depth": True
       }
     },
     {
       "module": "renderer.SegMapRenderer",
       "config": {
-        "map_by": "class"
+        "map_by": ["instance", "class", "name", "cp_uid"],
+        "default_values": {"cp_uid": -1}
+
+      }
+    },
+    {
+      "module": "writer.CameraStateWriter",
+      "config": {
+        "attributes_to_write": ["location", "rotation_euler", "fov_x", "fov_y", "shift_x", "shift_y", "cam_K", "cam2world_matrix"]
       }
     },
     {
