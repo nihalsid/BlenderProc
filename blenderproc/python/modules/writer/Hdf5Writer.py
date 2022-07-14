@@ -5,11 +5,16 @@ import os
 import bpy
 import h5py
 import numpy as np
+import json
 
 from blenderproc.python.modules.main.GlobalStorage import GlobalStorage
 from blenderproc.python.modules.writer.WriterInterface import WriterInterface
 from blenderproc.python.utility.Utility import Utility
+import imageio
+import pickle
 
+# import pydevd_pycharm
+# pydevd_pycharm.settrace('localhost', port=12345, stdoutToServer=True, stderrToServer=True)
 
 class Hdf5Writer(WriterInterface):
     """ For each key frame merges all registered output files into one hdf5 file.
@@ -117,3 +122,43 @@ class Hdf5Writer(WriterInterface):
                 if blender_proc_version:
                     WriterUtility._write_to_hdf_file(f, "blender_proc_version", np.string_(blender_proc_version))
 
+            # convert h5py to mainer format
+            if self.config.get_bool('convert_to_mainer', fallback=False):
+                with open(self.config.get_string("json_path"), 'r') as front_json:
+                    front_anno = json.load(front_json)
+                    scene_name = front_anno['uid']
+
+                output_folder = f"{self._output_dir}/{scene_name}"
+                frame_idx = int(os.path.basename(hdf5_path).split('.')[0])
+
+                with h5py.File(hdf5_path, "r") as data:
+                    print("{}:".format(hdf5_path))
+                    keys = [key for key in data.keys()]
+                    # create mainer-style folder structure
+                    for key in ["rgb", "depth", "normal", "inst", "sem", "room", "annotation"]:
+                        os.makedirs(f"{output_folder}/{key}", exist_ok=True)
+                    # export all image based data
+                    imageio.imwrite(f"{output_folder}/rgb/{frame_idx:05}.png", np.array(data['colors']))
+                    imageio.imwrite(f"{output_folder}/depth/{frame_idx:05}.exr", np.array(data['depth']))
+                    imageio.imwrite(f"{output_folder}/normal/{frame_idx:05}.exr", np.array(data['normals']))
+                    imageio.imwrite(f"{output_folder}/inst/{frame_idx:05}.png", np.array(data['segmap'])[..., 0])
+                    imageio.imwrite(f"{output_folder}/sem/{frame_idx:05}.png", np.array(data['segmap'])[..., 1])
+
+                    segmap = eval(np.array(data["segcolormap"]))
+                    room_names = [x['room_name'] for x in segmap]
+                    room_labels = ["void"]+sorted([x['instanceid'] for x in front_anno['scene']['room']])
+                    room_map =  {room_name: room_labels.index(room_name) for room_name in room_names}
+                    inst2room_map = {int(x['idx']): x['room_name'] for x in eval(np.array(data["segcolormap"]))}
+                    inst2room_id = {inst_idx: room_map[room_name]  for inst_idx, room_name in inst2room_map.items()}
+
+                    inst  = np.array(data['segmap'])[..., 0]
+                    room = np.zeros_like(inst)
+                    for inst_idx, room_id in inst2room_id.items():
+                        room[inst==inst_idx] = room_id
+                    imageio.imwrite(f"{output_folder}/room/{frame_idx:05}.png", room)
+                    # raw frame-wise annotation
+                    frame_anno = {"segcolormap": eval(np.array(data["segcolormap"]))}
+                    frame_anno.update(eval(np.array(data["campose"]))[0])
+
+                    pickle.dump(frame_anno, open(f"{output_folder}/annotation/{frame_idx:05}.pkl", "wb"))
+                os.remove(hdf5_path)

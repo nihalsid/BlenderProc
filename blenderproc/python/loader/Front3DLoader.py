@@ -88,8 +88,10 @@ def load_front3d(json_path: str, future_model_path: str, front_3D_texture_path: 
     if "scene" not in data:
         raise Exception("There is no scene data in this json file: {}".format(json_path))
 
+    excluded_object_uids = Front3DLoader._get_all_object_uids_not_in_room("OtherRoom", data)
+
     created_objects = Front3DLoader._create_mesh_objects_from_file(data, front_3D_texture_path,
-                                                                   ceiling_light_strength, label_mapping, json_path)
+                                                                   ceiling_light_strength, label_mapping, json_path, exclude_uids=excluded_object_uids)
 
     all_loaded_furniture = Front3DLoader._load_furniture_objs(data, future_model_path, lamp_light_strength, label_mapping)
 
@@ -237,7 +239,7 @@ class Front3DLoader:
 
     @staticmethod
     def _create_mesh_objects_from_file(data: dict, front_3D_texture_path: str, ceiling_light_strength: float,
-                                       label_mapping: LabelIdMapping, json_path: str, room: dict = None) -> List[MeshObject]:
+                                       label_mapping: LabelIdMapping, json_path: str, room: dict = None, exclude_uids=[]) -> List[MeshObject]:
         """
         This creates for a given data json block all defined meshes and assigns the correct materials.
         This means that the json file contains some mesh, like walls and floors, which have to built up manually.
@@ -273,6 +275,8 @@ class Front3DLoader:
         for mesh_data in data["mesh"]:
             # extract the obj name, which also is used as the category_id name
             if valid_children_refs is not None and mesh_data['uid'] not in valid_children_refs:
+                continue
+            if mesh_data['uid'] in exclude_uids:
                 continue
             used_obj_name = mesh_data["type"].strip()
             if used_obj_name == "":
@@ -512,6 +516,15 @@ class Front3DLoader:
         for obj in objects:
             if not obj.has_cp("room_name"):
                 obj.set_cp("room_name", "void")
+
+    @staticmethod
+    def _get_all_object_uids_not_in_room(room_name, data):
+        excluded_uids = []
+        for room_id, room in enumerate(data["scene"]["room"]):
+            for child in room["children"]:
+                if room["instanceid"] == room_name:
+                    excluded_uids.append(child["ref"])
+        return list(set(excluded_uids))
 
     @staticmethod
     def _move_and_duplicate_furniture(data: dict, all_loaded_furniture: list) -> List[MeshObject]:

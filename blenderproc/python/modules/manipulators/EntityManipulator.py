@@ -1,5 +1,5 @@
 import warnings
-from random import choice
+from random import seed, choice
 
 import bpy
 import numpy as np
@@ -391,12 +391,19 @@ class EntityManipulator(Module):
                 # instruction about unpacking the data: key, corresponding Config method to extract the value,
                 # it's default value and a postproc function
                 instructions = {"randomization_level": (Config.get_float, 0.2, None),
+                                "seed_key": (Config.get_string, "", None),
                                 "add_to_objects_without_material": (Config.get_bool, False, None),
                                 "materials_to_replace_with": (Config.get_list,
                                                               BlenderUtility.get_all_materials(), None),
                                 "obj_materials_cond_to_be_replaced": (Config.get_raw_dict, {}, None)}
                 result = self._unpack_params(rand_config, instructions)
+                if result['seed_key'] is None:
+                    seed_val = None
+                else:
+                    seed_val = hash(result['seed_key'].split('/')[-1]) % 65536
+                seed(seed_val)
                 result["material_to_replace_with"] = choice(result["materials_to_replace_with"])
+                seed(None)
             else:
                 result = params_conf.get_raw_value(key)
 
