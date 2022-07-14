@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from blenderproc.python.writer.WriterUtility import WriterUtility
 
 import os
@@ -64,6 +66,14 @@ class Hdf5Writer(WriterInterface):
                         frame_offset = max(frame_offset, int(index) + 1)
         else:
             frame_offset = 0
+
+        if self.config.get_bool('export_blender', fallback=False):
+            with open(self.config.get_string("json_path"), 'r') as front_json:
+                    front_anno = json.load(front_json)
+                    scene_name = front_anno['uid']
+            output_folder = f"{self._output_dir}/{scene_name}/mesh"
+            Path(output_folder).mkdir(exist_ok=True, parents=True)
+            bpy.ops.wm.save_as_mainfile(filepath=str(Path(output_folder) / "scene.blend"))
 
         # Go through all frames
         for frame in range(bpy.context.scene.frame_start, bpy.context.scene.frame_end):

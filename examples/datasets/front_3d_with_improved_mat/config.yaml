@@ -200,6 +200,7 @@
       "config": {
         "json_path": "<args:0>",
         "convert_to_mainer": True,
+        "export_blender": True,
         "postprocessing_modules": {
           "depth": [
             {
