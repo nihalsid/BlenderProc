@@ -16,27 +16,22 @@ if not os.path.exists(args.front) or not os.path.exists(args.future_folder):
     raise Exception("One of the two folders does not exist!")
 
 bproc.init()
+mapping_file = bproc.utility.resolve_resource(os.path.join("front_3D", "3D_front_mapping.csv"))
+mapping = bproc.utility.LabelIdMapping.from_csv(mapping_file)
 
-room_split_floor_objects = bproc.loader.load_front3d_floors_split_by_room(json_path=args.front, future_model_path=args.future_folder)
-
-context = bpy.context
-scene = context.scene
-viewlayer = context.view_layer
+# load the front 3D objects
+loaded_objects = bproc.loader.load_front3d(
+    json_path=args.front,
+    future_model_path=args.future_folder,
+    front_3D_texture_path=args.front_3D_texture_path,
+    label_mapping=mapping
+)
 
 with open(args.front, 'r') as front_json:
     front_anno = json.load(front_json)
     scene_name = front_anno['uid']
 
-dest_path = Path(args.output_dir, scene_name, "floor")
+dest_path = Path(args.output_dir, scene_name, "mesh")
 dest_path.mkdir(exist_ok=True, parents=True)
 
-for room_name in room_split_floor_objects:
-    bpy.ops.object.select_all(action='DESELECT')
-    obs = [o.blender_obj for o in room_split_floor_objects[room_name]]
-    for ob in obs:
-        viewlayer.objects.active = ob
-        ob.select_set(True)
-    stl_path = dest_path / f"{room_name}.stl"
-    bpy.ops.export_mesh.stl(filepath=str(stl_path), use_selection=True)
-
-bpy.ops.object.select_all(action='DESELECT')
+bpy.ops.export_scene.obj(filepath=str(dest_path / "mesh.obj"), use_materials=False)

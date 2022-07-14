@@ -161,4 +161,5 @@ class Hdf5Writer(WriterInterface):
                     frame_anno.update(eval(np.array(data["campose"]))[0])
 
                     pickle.dump(frame_anno, open(f"{output_folder}/annotation/{frame_idx:05}.pkl", "wb"))
+
                 os.remove(hdf5_path)
