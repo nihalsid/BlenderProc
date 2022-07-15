@@ -3,7 +3,7 @@ from random import seed, choice
 
 import bpy
 import numpy as np
-
+import hashlib
 import blenderproc.python.utility.BlenderUtility as BlenderUtility
 from blenderproc.python.modules.main.Module import Module
 from blenderproc.python.modules.provider.getter.Material import Material
@@ -390,6 +390,12 @@ class EntityManipulator(Module):
                 rand_config = Config(params_conf.get_raw_dict(key))
                 # instruction about unpacking the data: key, corresponding Config method to extract the value,
                 # it's default value and a postproc function
+                seed_key = rand_config.get_string('seed_key')
+                if seed_key is None:
+                    seed_val = None
+                else:
+                    seed_val = int(hashlib.md5(seed_key.split('/')[-1].encode('utf-8')).hexdigest(), 16) % 65536
+                seed(seed_val)
                 instructions = {"randomization_level": (Config.get_float, 0.2, None),
                                 "seed_key": (Config.get_string, "", None),
                                 "add_to_objects_without_material": (Config.get_bool, False, None),
@@ -397,11 +403,6 @@ class EntityManipulator(Module):
                                                               BlenderUtility.get_all_materials(), None),
                                 "obj_materials_cond_to_be_replaced": (Config.get_raw_dict, {}, None)}
                 result = self._unpack_params(rand_config, instructions)
-                if result['seed_key'] is None:
-                    seed_val = None
-                else:
-                    seed_val = hash(result['seed_key'].split('/')[-1]) % 65536
-                seed(seed_val)
                 result["material_to_replace_with"] = choice(result["materials_to_replace_with"])
                 seed(None)
             else:
@@ -460,6 +461,11 @@ class EntityManipulator(Module):
         :param entity: An object to modify. Type: bpy.types.Object.
         :param value: Configuration data. Type: dict.
         """
+        if value['seed_key'] is None:
+            seed_val = None
+        else:
+            seed_val = int(hashlib.md5(value['seed_key'].split('/')[-1].encode('utf-8')).hexdigest(), 16) % 65536
+        np.random.seed(seed_val)
         if hasattr(entity, 'material_slots'):
             if entity.material_slots:
                 for mat in entity.material_slots:
@@ -474,6 +480,7 @@ class EntityManipulator(Module):
                 # this object didn't have a material before
                 if np.random.uniform(0, 1) <= value["randomization_level"]:
                     entity.data.materials.append(value["material_to_replace_with"])
+        np.random.seed(None)
 
     def _unpack_params(self, param_config: Config, instructions: dict):
         """ Unpacks the data from a config object following the instructions in the dict.
