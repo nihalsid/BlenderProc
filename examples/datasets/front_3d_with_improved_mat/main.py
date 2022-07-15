@@ -3,6 +3,9 @@ import argparse
 import os
 import numpy as np
 import random
+import debugpy
+debugpy.listen(5678)
+debugpy.wait_for_client()
 
 
 parser = argparse.ArgumentParser()
@@ -101,9 +104,12 @@ while tries < 10000 and poses < 10:
 # Also render normals
 bproc.renderer.enable_normals_output()
 
+# Additional outputs
+bproc.renderer.enable_depth_output()
+
 # render the whole pipeline
 data = bproc.renderer.render()
-data.update(bproc.renderer.render_segmap(map_by="class"))
+data.update(bproc.renderer.render_segmap(map_by=["instance", "class", "name"]))
 
 # write the data to a .hdf5 container
 bproc.writer.write_hdf5(args.output_dir, data)

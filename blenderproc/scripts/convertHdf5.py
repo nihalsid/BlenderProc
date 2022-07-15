@@ -37,8 +37,8 @@ def convert_hdf5(base_file_path, front_anno, output_dir=None):
                 room_names = [x['room_name'] for x in segmap]
                 room_labels = ["void"]+sorted([x['instanceid'] for x in front_anno['scene']['room']])
                 room_map =  {room_name: room_labels.index(room_name) for room_name in room_names}
-                inst2room_map = {int(x['idx']): x['room_name'] for x in eval(np.array(data["segcolormap"]))}
-                inst2room_id = {inst_idx: room_map[room_name]  for inst_idx, room_name in inst2room_map.items()}
+                inst2room_name = {int(x['idx']): x['room_name'] for x in eval(np.array(data["segcolormap"]))}
+                inst2room_id = {inst_idx: room_map[room_name]  for inst_idx, room_name in inst2room_name.items()}
 
                 inst  = np.array(data['segmap'])[..., 0]
                 room = np.zeros_like(inst)
@@ -50,6 +50,7 @@ def convert_hdf5(base_file_path, front_anno, output_dir=None):
                 frame_anno = {"segcolormap": eval(
                     np.array(data["segcolormap"]))}
                 frame_anno.update(eval(np.array(data["campose"]))[0])
+                frame_anno.update({"room_map": room_map, "inst2room_id": inst2room_id})
 
                 pickle.dump(frame_anno, open(
                     f"{output_folder}/annotation/{frame_idx:05}.pkl", "wb"))
