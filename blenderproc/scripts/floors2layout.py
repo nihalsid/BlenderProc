@@ -3,6 +3,7 @@ from enum import unique
 from math import dist
 from turtle import distance, shape
 import numpy as np
+from regex import I
 from scipy.spatial import ConvexHull, Delaunay
 from numba import jit, njit
 import numba
@@ -155,6 +156,8 @@ from sklearn.feature_extraction.image import grid_to_graph
 from scipy.ndimage import binary_dilation, generate_binary_structure
 from scipy import interpolate
 from trimesh.proximity import ProximityQuery
+from dutils import rot_mat, trans_mat
+from scipy.interpolate import interp1d
 
 def pts_inside_floor_mesh(floor_mesh, pts, th=0.02):
     pts_2d = np.concatenate([pts[:,:2],np.zeros((len(pts),1))],1)
@@ -173,29 +176,69 @@ def get_room_id_mask(floor_meshes, query_pts, th=0.02):
     return room_id_mask
 
 
-def get_all(vfront_root: str,  vox_size=0.15, min_height_v = 2, max_height_v = 13, dilation_size_v=1):
+def slerp_forward(R1,R2,times):
+    f1,f2 = R1[:3,2], R2[:3,2]
+    f1,f2 = f1/np.linalg.norm(f1), f2/np.linalg.norm(f2)
+    n = np.cross(f1,f2)
+    n /= np.linalg.norm(n)
+    delta_angle = np.arccos(np.dot(f1,f2))
+    inter_R = []
+    for time in times:
+        inter_R.append(rot_mat(n,time*delta_angle) @ R1)
+    return inter_R
+
+def equal_slerp(T1,T2, axis=2, max_angle=0.05):
+    eps=1e-6
+    pos1,pos2 = T1[:3,3], T2[:3,3]
+    vec1,vec2 = T1[:3,axis], T2[:3, axis]
+    vec1,vec2 = vec1/(np.linalg.norm(vec1)+eps), vec2/(np.linalg.norm(vec2)+eps)
+    n = np.cross(vec1,vec2)
+    n /= np.linalg.norm(n)+eps
+    delta_angle = np.arccos(np.dot(vec1,vec2))
+    inter_R = []
+    n_steps = int(delta_angle/max_angle)+1
+    for idx in range(n_steps):
+        inter_R.append(rot_mat(n,idx*max_angle) @ T1[:3,:3])
+    inter_R = np.stack(inter_R)     
+        
+    lerp = interp1d([0,1], np.stack([pos1,pos2]), axis=0)
+    inter_trans = lerp(np.linspace(0,1,n_steps, endpoint=False))
+
+    inter_trs = np.tile(np.eye(4)[None,],(n_steps,1,1))
+    inter_trs[:,:3,:3] = inter_R
+    inter_trs[:,:3,3] = inter_trans
+
+    return inter_trs
+
+
+def get_all(vfront_root: str,  vox_size=0.15, min_height_v = 2, max_height_v = 13, dilation_size_v=1, cam_min_dist_v=3):
     scene_mesh_fn = Path(vfront_root,"mesh","mesh.obj")
     scene_mesh = trimesh.load(scene_mesh_fn, force='mesh')
     # NOTE: Trimesh does some weird transformation, this seems to fix it
     scene_mesh.vertices = np.column_stack((scene_mesh.vertices[:,0], -scene_mesh.vertices[:,2], scene_mesh.vertices[:,1]))
+    # for visualization
+    sl_scene_mesh = scene_mesh.slice_plane(np.array([0,0,1.8]), np.array([0,0,-1]))
+
     tm_vox = scene_mesh.voxelized(vox_size)
-    occ_vox_grid = np.zeros(tm_vox.shape,dtype=bool)
-    occ_vox_grid[tuple(np.array(tm_vox.sparse_indices).T)]=True
+    vox2scene = np.array(tm_vox.transform)
+    sl_vox2scene =  np.copy(vox2scene) @ trans_mat([0,0,min_height_v]) # sliced room based on z min height
+    floor_meshes = get_floor_meshes(vfront_root)
+    occ_vox = np.zeros(tm_vox.shape,dtype=bool)
+    occ_vox[tuple(np.array(tm_vox.sparse_indices).T)]=True
     # dil_struct = generate_binary_structure(dilation_size_v, dilation_size_v)
-    dil_occ_vox_grid = binary_dilation(occ_vox_grid, iterations=dilation_size_v)
+    dil_occ_vox = binary_dilation(occ_vox, iterations=dilation_size_v)
 
     # for distance computation get room ids of occupied
-    occ_vox_inds = np.stack(np.nonzero(occ_vox_grid),1)
-    occ_pts_scene = dot(tm_vox.transform, occ_vox_inds) 
+    occ_vox_inds = np.stack(np.nonzero(occ_vox),1)
+    occ_pts_scene = dot(vox2scene, occ_vox_inds) 
     occ_room_id_mask = get_room_id_mask(floor_meshes, occ_pts_scene)
-    occ_room_id_vox = np.full(occ_vox_grid.shape,-1)
-    occ_room_id_vox[occ_vox_grid] = occ_room_id_mask
+    occ_room_id_vox = np.full(occ_vox.shape,-1)
+    occ_room_id_vox[occ_vox] = occ_room_id_mask
 
     # get room assignments for each free space vox
-    free_vox = ~dil_occ_vox_grid
+    free_vox = ~dil_occ_vox
     free_vox_inds = np.stack(np.nonzero(free_vox),1)
-    free_pts_scene =dot(tm_vox.transform, free_vox_inds) 
-    floor_meshes = get_floor_meshes(vfront_root)
+    free_pts_scene =dot(vox2scene, free_vox_inds) 
     free_room_id_mask = get_room_id_mask(floor_meshes, free_pts_scene)
     free_room_id_vox = np.full(free_vox.shape,-1)
     free_room_id_vox[free_vox] = free_room_id_mask
@@ -204,6 +247,8 @@ def get_all(vfront_root: str,  vox_size=0.15, min_height_v = 2, max_height_v = 1
     sl_free_vox = free_vox[...,min_height_v:max_height_v+1]
     sl_free_room_id_vox = free_room_id_vox[...,min_height_v:max_height_v+1]
 
+    sl_occ_vox = occ_vox[...,min_height_v:max_height_v+1]
+    sl_occ_room_id_vox = occ_room_id_vox[...,min_height_v:max_height_v+1]
 
     # calculate the reachable points inside room as the largest connected component
     # per room, store ids 
@@ -264,6 +309,102 @@ def get_all(vfront_root: str,  vox_size=0.15, min_height_v = 2, max_height_v = 1
         path_inds = sl_free_vox_inds[a_path]
         full_path_inds.append(path_inds)
     full_path_inds = np.concatenate(full_path_inds)
+    
+    ### sample locations inside room
+    # based on distance to anything
+    # relative to size of room
+    min_samples = 30
+    max_samples = 500
+    sample_devisor = 40
+    smoothness = 200
+    for sl_room_id in sl_room_ids:
+        sl_room_occ_mask = sl_occ_room_id_vox == sl_room_id
+        sl_room_free_mask = sl_free_room_id_vox_cc == sl_room_id
+        sl_room_occ_inds = np.stack(np.nonzero(sl_room_occ_mask),1)
+        sl_room_free_inds = np.stack(np.nonzero(sl_room_free_mask),1)
+        free2occ_dist_mat = distance_matrix(sl_room_free_inds, sl_room_occ_inds)
+        free_dists = np.min(free2occ_dist_mat,1)
+        valid_room_inds = sl_room_free_inds[free_dists>=cam_min_dist_v]
+        valid_dists = free_dists[free_dists>=cam_min_dist_v]
+
+        # num of samples based on valid region size
+        num_valid_samples =valid_room_inds.shape[0] 
+        num_cam_samples = max(min_samples,min(int(num_valid_samples/sample_devisor),max_samples))
+        cam_key_indices = np.random.choice(np.arange(num_valid_samples),num_cam_samples, p=valid_dists/np.sum(valid_dists))
+        cam_key_inds = valid_room_inds[cam_key_indices]
+
+        # compute path between all the cam key points
+        num_samples = 3*num_cam_samples
+        dist_mat = distance_matrix(cam_key_inds,cam_key_inds)
+        cam_key_G = nx.from_numpy_array(dist_mat)
+        tsp_sol = nx.approximation.traveling_salesman_problem(cam_key_G)
+        # create a smooth trajectory between ordered points
+        tck, u = interpolate.splprep(tuple(cam_key_inds[tsp_sol].T),s=smoothness)
+        sample_u = np.linspace(0,1,num_samples,endpoint=True)
+        inter_pts = np.stack(interpolate.splev(sample_u,tck),1)
+
+
+        up_vec = np.array([0,0,1])
+        # bound the angle of forward and up vector by a threshold f_ang_max
+        f_ang_max = np.pi/4# np.pi/4
+
+        f0 = np.concatenate([inter_pts[1:] - inter_pts[:-1], (inter_pts[-1]-inter_pts[0])[None,:]])
+        f0 /= np.linalg.norm(f0,axis=1)[:,None]
+
+        f1 = np.copy(f0)
+        for i in range(f0.shape[0]):
+            sgn = np.sign(np.dot(f0[i],up_vec))
+            ang0 = np.arccos(np.dot(f0[i],sgn*up_vec))
+            # angle between f0 and up
+            if np.pi/2 - np.abs(ang0) > f_ang_max:
+                # the angle is too small
+                # cam looks to much up or down
+                delta_angle = sgn * (f_ang_max - (np.pi/2 - np.abs(ang0)) )
+                # -> get f1, vector that has same ortho. direction to up_vec but less yaw
+                n = np.cross(f0[i],up_vec)
+                n /= np.linalg.norm(n)
+                # rotate around n so f1 = rot_a * f0, with 
+                # np.abs(np.dot(f1,up_vec)) = f_dot_max
+                f1[i] = dot(rot_mat(n,delta_angle),f0[i])
+
+        l = np.cross(f1,up_vec)
+        l /= np.linalg.norm(l,axis=1)[:,None]
+        u = np.cross(f1,l)
+        u *= np.sign(u[:,2])[:,None]
+        sample_rots = np.stack([l, u, f1],-1)
+
+        sample_tranfs = np.tile(np.eye(4)[None,...], (num_samples,1,1))
+        sample_tranfs[:,:3,3] = inter_pts
+        sample_tranfs[:,:3,:3] = sample_rots
+                
+
+        max_rot_angle = 10* np.pi/180
+        interp_trs = [np.copy(x) for x in sample_tranfs]
+        # run interpolation for each axis
+        # -> this enforces that changes for all rotation axes are small
+        for axis in [2,1,0]:
+            new_interp_trs = []
+            for i in range(len(interp_trs)-1):
+                int_tranfs = equal_slerp(interp_trs[i],interp_trs[i+1], axis, max_rot_angle)
+                new_interp_trs += [x for x in int_tranfs]
+            interp_trs = new_interp_trs
+        interp_trs = np.stack(interp_trs)
+        # scaled back to orginal mesh
+        room_trs = sl_vox2scene @ interp_trs
+
+        room_cam_pos = room_trs[:,:3,3]
+        dvis(room_cam_pos,"line",c=int(sl_room_id),vs=3)
+        dvis(inter_pts,"line",c=6,vs=3)
+        dvis(pts, vs=0.03,c=3)
+        dvis(pts[tsp_sol],"line",c=2)
+        [dvis(interp_trs[i],t=i,vs=0.5, name=f"trs/{i}") for i in range(100)]
+
+        dvis(scene_mesh)
+        dvis({"trs": room_trs[0],"fov": 90}, 'cam',name='cam')
+        [dvis(room_trs[t], "obj_kf", name="cam",t=t) for t in range(0,200)]
+
+
+    
 
 
 
