@@ -28,6 +28,13 @@ class CustomCameraLoader2(CameraInterface):
         if stride<=0:
             stride = 1
 
+        ## TODO: HARDCODED FOR TESTING
+        intrinsics_config = Config({
+            "resolution_x": 256,
+            "resolution_y": 256,
+            "fov": 70
+        })
+        self._set_cam_intrinsics(bpy.context.scene.camera.data, intrinsics_config)
         
         # set extrinsics
         for cam_trs in camera_trajetory[:max_n][::stride]:
