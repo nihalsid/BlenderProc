@@ -30,6 +30,11 @@ def points2convex_hull(points):
 def point_in_hull(point, hull, tolerance=1e-12):
     return np.stack((np.dot(eq[:-1], point.T) + eq[-1] <= tolerance) for eq in hull.equations).all(0)
 
+def trs2f_vec(trs):
+    # get nx6 forward vector as vec_origin, vec_target
+    return np.concatenate([trs[:,:3,3],trs[:,:3,3]+ trs[:,:3,2]],1)
+
+
 # Taken from 
 # https://github.com/sasamil/PointInPolygon_Py
 @jit(nopython=True)
@@ -193,7 +198,7 @@ def slerp_forward(R1,R2,times):
         inter_R.append(rot_mat(n,time*delta_angle) @ R1)
     return inter_R
 
-def equal_slerp(T1,T2, axis=2, max_angle=0.05):
+def equal_slerp(T1,T2, axis=2, max_angle=0.05, max_trans=1):
     eps=1e-6
     pos1,pos2 = T1[:3,3], T2[:3,3]
     vec1,vec2 = T1[:3,axis], T2[:3, axis]
@@ -207,6 +212,8 @@ def equal_slerp(T1,T2, axis=2, max_angle=0.05):
     else:
         inter_R = []
         n_steps = int(delta_angle/max_angle)+1
+        if max_trans is not None:
+            n_steps = max(n_steps, int(np.linalg.norm(pos2-pos1)/max_angle))
         for idx in range(n_steps):
             inter_R.append(rot_mat(n,idx*max_angle) @ T1[:3,:3])
         inter_R = np.stack(inter_R)     
@@ -220,6 +227,80 @@ def equal_slerp(T1,T2, axis=2, max_angle=0.05):
     assert np.isnan(inter_trs).sum() == 0
 
     return inter_trs
+
+def path_following_traj2d(inter_pts, max_rot_deg=10.0, max_f_deg=20.0, max_trans=1, temp=0.2, eps=1e-6, end_trs=None, cycle=True, start_trs=None):
+    num_samples = len(inter_pts)
+    up_vec = np.array([0,0,1])
+    # compute 2d forward direction
+    if cycle:
+        # (last point attached, so take gradient of 1 and -1)
+        f0 = np.concatenate([inter_pts[1:] - inter_pts[:-1], (inter_pts[1]-inter_pts[-1])[None,:]])
+    else:
+        f0 = np.concatenate([inter_pts[1:] - inter_pts[:-1],(inter_pts[-1]-inter_pts[-2])[None,:]]) 
+    
+    f0 /= np.linalg.norm(f0,axis=1)[:,None] +eps
+
+    proj_f0 = np.stack([f0[:,0], f0[:,1],np.zeros(len(f0))],1)
+    f0_len = np.linalg.norm(proj_f0,axis=1)
+    
+    f1 = [f0[0]]
+    for t in range(1,len(f0)):
+        f_next = f1[-1] + min(f0_len[t] * temp,1) * (f0[t]-f1[-1])
+        f_next /= np.linalg.norm(f_next) +eps 
+        f1.append(f_next)
+    f1 = np.stack(f1)
+
+
+    f_ang_max = max_f_deg * np.pi/180
+    f2 = np.copy(f1)
+    for i in range(f1.shape[0]):
+        sgn = np.sign(np.dot(f1[i],up_vec))
+        ang0 = np.arccos(np.dot(f1[i],sgn*up_vec))
+        # angle between f1 and up
+        if np.pi/2 - np.abs(ang0) > f_ang_max:
+            # the angle is too small
+            # cam looks too much up or down
+            delta_angle = sgn * (f_ang_max - (np.pi/2 - np.abs(ang0)) )
+            # -> get f1, vector that has same ortho. direction to up_vec but less yaw
+            n = np.cross(f1[i],up_vec)
+            n /= np.linalg.norm(n)+eps
+            # rotate around n so f1 = rot_a * f1, with 
+            # np.abs(np.dot(f1,up_vec)) = f_dot_max
+            f2[i] = dot(rot_mat(n,delta_angle),f1[i])
+    # with new forward vectors, update left and up
+
+    l = np.cross(f2,up_vec)
+    l /= np.linalg.norm(l,axis=1)[:,None] +eps
+    u = np.cross(f2,l)
+    u *= np.sign(u[:,2])[:,None]
+    sample_rots = np.stack([l, u, f2],-1)
+
+    sample_tranfs = np.tile(np.eye(4)[None,...], (num_samples,1,1))
+    sample_tranfs[:,:3,3] = inter_pts
+    sample_tranfs[:,:3,:3] = sample_rots
+    if end_trs is not None:
+        sample_tranfs = np.concatenate([sample_tranfs,end_trs[None,:]])
+    if start_trs is not None:
+        sample_tranfs = np.concatenate([start_trs[None,:],sample_tranfs])
+
+
+    max_rot_angle = max_rot_deg* np.pi/180 # maximum about of rotation per step
+    interp_trs = [np.copy(x) for x in sample_tranfs]
+    # run interpolation for each axis
+    # -> this enforces that changes for all rotation axes are small
+    if cycle:
+        bias = 0
+    else:
+        bias = 1
+    for axis in [2,1,0]:
+        new_interp_trs = []
+        for i in range(len(interp_trs)-bias):
+            int_tranfs = equal_slerp(interp_trs[i],interp_trs[(i+1)%len(interp_trs)], axis, max_rot_angle, max_trans)
+            new_interp_trs += [x for x in int_tranfs]
+        interp_trs = new_interp_trs
+    interp_trs = np.stack(interp_trs)
+    return interp_trs
+
 
 def path_following_traj(inter_pts, max_f_deg=30.0, max_rot_deg=10.0, eps=1e-6, end_trs=None, cycle=True):
     num_samples = len(inter_pts)
@@ -282,8 +363,48 @@ def path_following_traj(inter_pts, max_f_deg=30.0, max_rot_deg=10.0, eps=1e-6, e
     interp_trs = np.stack(interp_trs)
     return interp_trs
 
+def tiktok_traj(inter_pts, pitch_deg=30, yaw_deg=360, pitch_len=100, yaw_len=200, max_f_deg=30.0, max_rot_deg=10.0, eps=1e-6, end_trs=None, cycle=True):
+    # pitch speed
+    num_samples = len(inter_pts)
 
-def get_complete_traj(vfront_root: str,  vox_size=0.15, min_height_v = 2, max_height_v = 13, dilation_size_v=1, cam_min_dist_v=3):
+    t = np.arange(num_samples)
+    pitch_angles = pitch_deg * np.pi/180* np.sin(t/pitch_len*2*np.pi)
+    yaw_angles = yaw_deg * np.pi/180* np.sin(t/yaw_len*2*np.pi)
+
+    pitch_rot = np.stack([rot_mat([1,0,0],pa) for pa in pitch_angles])
+    yaw_rot = np.stack([rot_mat([0,0,1],ya) for ya in yaw_angles])
+
+    sample_rots = (yaw_rot @ pitch_rot)[:,:,[0,2,1]]
+
+    sample_tranfs = np.tile(np.eye(4)[None,...], (num_samples,1,1))
+    sample_tranfs[:,:3,3] = inter_pts
+    sample_tranfs[:,:3,:3] = sample_rots
+    if end_trs is not None:
+        sample_tranfs = np.concatenate([sample_tranfs,end_trs[None,:]])
+            
+
+    max_rot_angle = max_rot_deg* np.pi/180 # maximum about of rotation per step
+    interp_trs = [np.copy(x) for x in sample_tranfs]
+    # run interpolation for each axis
+    # -> this enforces that changes for all rotation axes are small
+    if cycle:
+        bias = 0
+    else:
+        bias = 1
+    for axis in [2,1,0]:
+        new_interp_trs = []
+        for i in range(len(interp_trs)-bias):
+            int_tranfs = equal_slerp(interp_trs[i],interp_trs[(i+1)%len(interp_trs)], axis, max_rot_angle)
+            new_interp_trs += [x for x in int_tranfs]
+        interp_trs = new_interp_trs
+    interp_trs = np.stack(interp_trs)
+    return interp_trs
+
+
+
+
+
+def get_complete_traj(vfront_root: str,  vox_size=0.15, min_height_v = 2, max_height_v = 13, dilation_size_v=1, cam_min_dist_v=4, traj_mode='follow', conn_traj_mode=None):
     np.random.seed(int_hash(vfront_root))
     scene_mesh_fn = Path(vfront_root,"mesh","mesh.obj")
     scene_mesh = trimesh.load(scene_mesh_fn, force='mesh')
@@ -391,6 +512,8 @@ def get_complete_traj(vfront_root: str,  vox_size=0.15, min_height_v = 2, max_he
     max_samples = 500
     sample_devisor = 40
     smoothness = 200
+    sample_devisor = 30
+    smoothness = 250
     room_trajectories = dict()
     for sl_room_id in sl_room_ids:
         sl_room_occ_mask = sl_occ_room_id_vox == sl_room_id
@@ -456,13 +579,18 @@ def get_complete_traj(vfront_root: str,  vox_size=0.15, min_height_v = 2, max_he
 
             new_inter_pts = np.stack(new_inter_pts)
             inter_pts = new_inter_pts
-
-        room_trajectories[int(sl_room_id)] = path_following_traj(inter_pts,max_f_deg=30,max_rot_deg=10)
+        if traj_mode == "follow":
+            room_trajectories[int(sl_room_id)] = path_following_traj(inter_pts,max_f_deg=30,max_rot_deg=10)
+        if traj_mode == "follow_2d":
+            room_trajectories[int(sl_room_id)] = path_following_traj2d(inter_pts,max_rot_deg=10, max_trans=1, temp=0.2)
+        elif traj_mode == "tiktok":
+            room_trajectories[int(sl_room_id)] = tiktok_traj(inter_pts, pitch_deg=30, yaw_deg=360, pitch_len=100,yaw_len=200)
 
         if False:
             # debugging code
             # scaled back to orginal mesh
             dvis(sl_scene_mesh)
+            interp_trs = room_trajectories[int(sl_room_id)]
             room_trs = sl_vox2scene @ interp_trs
             room_cam_pos = room_trs[:,:3,3]
 
@@ -470,7 +598,7 @@ def get_complete_traj(vfront_root: str,  vox_size=0.15, min_height_v = 2, max_he
             dvis(inter_pts,"line",c=6,vs=3)
             dvis(pts, vs=0.03,c=3)
             dvis(pts[tsp_sol],"line",c=2)
-            [dvis(interp_trs[i],t=i,vs=0.5, name=f"trs/{i}") for i in range(100)]
+            [dvis(room_trs[i],t=i,vs=0.5, name=f"trs/{i}") for i in range(100)]
 
             dvis({"trs": room_trs[0],"fov": 90}, 'cam',name='cam')
             [dvis(room_trs[t], "obj_kf", name="cam",t=t) for t in range(0,200)]
@@ -495,11 +623,6 @@ def get_complete_traj(vfront_root: str,  vox_size=0.15, min_height_v = 2, max_he
         closest_point_b = room_trj_b[shorted_conn_idx[1],:3,3].astype(int)
 
 
-        source = int(np.where(np.all(sl_free_vox_inds == closest_point_a,1))[0])
-        target = int(np.where(np.all(sl_free_vox_inds == closest_point_b,1))[0])
-        a_path = nx.astar_path(sl_free_G,source=source,target=target)
-        path_inds = sl_free_vox_inds[a_path]
-
 
         # start at connecting position at first visit of room
         if room_id_a not in reord_room_trajectories:
@@ -509,12 +632,30 @@ def get_complete_traj(vfront_root: str,  vox_size=0.15, min_height_v = 2, max_he
             reord_trj = np.concatenate([room_trj_b[shorted_conn_idx[1]:],room_trj_b[:shorted_conn_idx[1]]])
             reord_room_trajectories[room_id_b] = reord_trj
 
+
+        # already re-ordered the trajectory
+        # take end of this as starting point for connecting traj
+        closest_point_a = reord_room_trajectories[room_id_a][-1,:3,3].astype(int)
+
+        source = int(np.where(np.all(sl_free_vox_inds == closest_point_a,1))[0])
+        target = int(np.where(np.all(sl_free_vox_inds == closest_point_b,1))[0])
+        a_path = nx.astar_path(sl_free_G,source=source,target=target)
+        path_inds = sl_free_vox_inds[a_path]
+
+        # attach end point of traj in room a to the connecting path
+        # let interpolation handle the smooth transition
+        # path_inds = np.concatenate([reord_room_trajectories[room_id_a][-1,:3,3][None,:],path_inds],0)
         num_samples = 3*len(path_inds)
         tck, u = interpolate.splprep(tuple(path_inds.T),s=10)
         sample_u = np.linspace(0,1,num_samples,endpoint=True)
         inter_pts = np.stack(interpolate.splev(sample_u,tck),1)
         # dvis(dot(sl_vox2scene, inter_pts),vs=vox_size)
-        conn_trs = path_following_traj(inter_pts,max_f_deg=30,max_rot_deg=10, cycle=False,end_trs=reord_room_trajectories[room_id_b][0]) 
+        if traj_mode == "follow":
+            conn_trs = path_following_traj(inter_pts,max_f_deg=30,max_rot_deg=10, cycle=False,end_trs=reord_room_trajectories[room_id_b][0],start_trs=reord_room_trajectories[room_id_a][-1]) 
+        if traj_mode == "follow_2d":
+            conn_trs = path_following_traj2d(inter_pts,max_rot_deg=10, max_trans=1, temp=0.2, cycle=False,end_trs=reord_room_trajectories[room_id_b][0],start_trs=reord_room_trajectories[room_id_a][-1]) 
+        elif traj_mode == "tiktok":
+            conn_trs = tiktok_traj(inter_pts, pitch_deg=30, yaw_deg=360, pitch_len=10,yaw_len=10, cycle=False,end_trs=reord_room_trajectories[room_id_b][0],start_trs=reord_room_trajectories[room_id_a][-1])
         connecting_trajectories[idx] = conn_trs
         # [dvis(sl_vox2scene @ conn_trs[i], name=f"asb/{i}") for i in range(50)]
 
@@ -560,8 +701,10 @@ if __name__ == "__main__":
     # scene_layout = get_scene_layout("/home/normanm/fb_data/renders_front3d_debug/0003d406-5f27-4bbf-94cd-1cff7c310ba1")
     # testing voxelization
     scene_name ="/home/normanm/fb_data/renders_front3d_debug/0003d406-5f27-4bbf-94cd-1cff7c310ba1" 
-    compl_trajectory, compl_meta = get_complete_traj(scene_name, vox_size=0.15, min_height_v = 2, max_height_v = 13)
+    #scene_name ="/home/normanm/fb_data/renders_front3d_debug2/00154c06-2ee2-408a-9664-b8fd74742897" 
+    traj_mode = 'follow_2d'
+    compl_trajectory, compl_meta = get_complete_traj(scene_name, vox_size=0.15, min_height_v = 2, max_height_v = 13, traj_mode=traj_mode)
     dvis(compl_trajectory[:,:3,3],'line',vs=2)
-    pickle.dump(compl_trajectory, open(f"{scene_name}/compl_trajectory.pkl", 'wb'))
-    pickle.dump(compl_meta, open(f"{scene_name}/compl_meta.pkl", 'wb'))
+    pickle.dump(compl_trajectory, open(f"{scene_name}/compl_trajectory_2d.pkl", 'wb'))
+    pickle.dump(compl_meta, open(f"{scene_name}/compl_meta_2d.pkl", 'wb'))
 

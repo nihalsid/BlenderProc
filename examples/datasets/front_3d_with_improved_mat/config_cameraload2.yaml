@@ -15,7 +15,7 @@
           "output_dir": "<args:4>",
           "max_bounces": 200,
           "diffuse_bounces": 200,
-          "glossy_bounces": 200,
+          "glossy_bounces": 10,
           "transmission_bounces": 200,
           "transparency_bounces": 200,
         }
@@ -27,7 +27,7 @@
         "json_path": "<args:0>",
         "3D_future_model_path": "<args:1>",
         "3D_front_texture_path": "<args:2>",
-        "ceiling_light_strength": 0.9,
+        "ceiling_light_strength": 3,
         "lamp_light_strength": 9.0
       }
     },

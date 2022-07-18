@@ -4,7 +4,7 @@ import pickle
 import numpy as np
 
 
-def convert_to_custom_format(annotation_root, output_path):
+def convert_to_custom_format(traj_fn, H,W output_path):
     with open(output_path, 'w') as out:
         list_of_annots = sorted([y for y in annotation_root.iterdir() if y.name.endswith('.pkl')])
         with open(list_of_annots[0], 'rb') as fptr:
