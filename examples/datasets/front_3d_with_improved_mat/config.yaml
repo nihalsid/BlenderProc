@@ -184,8 +184,8 @@
     {
       "module": "renderer.SegMapRenderer",
       "config": {
-        "map_by": ["instance", "class", "name", "cp_uid", "room_name", "uid_ctr"],
-        "default_values": {"cp_uid": -1, "room_name": "void", "uid_ctr": 0}
+        "map_by": ["instance", "class", "name", "cp_uid", "room_name", "unique_uid"],
+        "default_values": {"cp_uid": -1, "room_name": "void", "unique_uid": -1}
       }
     },
     {

@@ -560,7 +560,7 @@ class Front3DLoader:
                             created_objects.append(new_obj)
                             new_obj.set_cp("is_used", True)
                             new_obj.set_cp("room_id", room_id)
-                            new_obj.set_cp("uid_ctr", instance_counter[obj.get_cp("uid")])
+                            new_obj.set_cp("unique_uid", f"{obj.get_cp('uid')}/{instance_counter[obj.get_cp('uid')]:03d}")
                             new_obj.set_cp("type", "Object")  # is an object used for the interesting score
                             new_obj.set_cp("coarse_grained_class", new_obj.get_cp("category_id"))
                             # this flips the y and z coordinate to bring it to the blender coordinate system
