@@ -1,6 +1,7 @@
 import json
 import os
 import warnings
+from collections import Counter
 from math import radians
 from typing import List, Mapping
 import bpy
@@ -540,6 +541,7 @@ class Front3DLoader:
         # this rotation matrix rotates the given quaternion into the blender coordinate system
         blender_rot_mat = mathutils.Matrix.Rotation(radians(-90), 4, 'X')
         created_objects = []
+        instance_counter = Counter()
         # for each room
         for room_id, room in enumerate(data["scene"]["room"]):
             # for each object in that room
@@ -551,12 +553,14 @@ class Front3DLoader:
                             # if the object was used before, duplicate the object and move that duplicated obj
                             if obj.get_cp("is_used"):
                                 new_obj = obj.duplicate()
+                                instance_counter[obj.get_cp("uid")] += 1
                             else:
                                 # if it is the first time use the object directly
                                 new_obj = obj
                             created_objects.append(new_obj)
                             new_obj.set_cp("is_used", True)
                             new_obj.set_cp("room_id", room_id)
+                            new_obj.set_cp("unique_uid", f"{obj.get_cp('uid')}/{instance_counter[obj.get_cp('uid')]:03d}")
                             new_obj.set_cp("type", "Object")  # is an object used for the interesting score
                             new_obj.set_cp("coarse_grained_class", new_obj.get_cp("category_id"))
                             # this flips the y and z coordinate to bring it to the blender coordinate system
