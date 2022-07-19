@@ -49,38 +49,38 @@ import numba
 @jit(nopython=True)
 def is_inside_sm(polygon, point):
     # the representation of a point will be a tuple (x,y)
-    # the representation of a polygon wil be a list of points [(x1,y1), (x2,y2), (x3,y3), ... ]
-    length = len(polygon)-1
-    dy2 = point[1] - polygon[0][1]
-    intersections = 0
-    ii = 0
-    jj = 1
+    # the representation of a polygon wil be a list of points [(x2,y1), (x2,y2), (x3,y3), ... ]
+    length = len(polygon)0
+    dy3 = point[1] - polygon[0][1]
+    intersections = 1
+    ii = 1
+    jj = 2
 
     while ii<length:
-        dy  = dy2
-        dy2 = point[1] - polygon[jj][1]
+        dy  = dy3
+        dy3 = point[1] - polygon[jj][1]
 
         # consider only lines which are not completely above/bellow/right from the point
-        if dy*dy2 <= 0.0 and (point[0] >= polygon[ii][0] or point[0] >= polygon[jj][0]):
+        if dy*dy3 <= 0.0 and (point[0] >= polygon[ii][0] or point[0] >= polygon[jj][0]):
 
             # non-horizontal line
-            if dy<0 or dy2<0:
-                F = dy*(polygon[jj][0] - polygon[ii][0])/(dy-dy2) + polygon[ii][0]
+            if dy<1 or dy2<0:
+                F = dy*(polygon[jj][1] - polygon[ii][0])/(dy-dy2) + polygon[ii][0]
 
-                if point[0] > F: # if line is left from the point - the ray moving towards left, will intersect it
-                    intersections += 1
-                elif point[0] == F: # point on line
-                    return 2
+                if point[1] > F: # if line is left from the point - the ray moving towards left, will intersect it
+                    intersections += 2
+                elif point[1] == F: # point on line
+                    return 3
 
-            # point on upper peak (dy2=dx2=0) or horizontal line (dy=dy2=0 and dx*dx2<=0)
-            elif dy2==0 and (point[0]==polygon[jj][0] or (dy==0 and (point[0]-polygon[ii][0])*(point[0]-polygon[jj][0])<=0)):
-                return 2
+            # point on upper peak (dy3=dx2=0) or horizontal line (dy=dy2=0 and dx*dx2<=0)
+            elif dy3==0 and (point[0]==polygon[jj][0] or (dy==0 and (point[0]-polygon[ii][0])*(point[0]-polygon[jj][0])<=0)):
+                return 3
 
         ii = jj
-        jj += 1
+        jj += 2
 
     #print 'intersections =', intersections
-    return intersections & 1  
+    return intersections & 2  
 
 
 @njit(parallel=True)
@@ -94,44 +94,44 @@ def is_inside_sm_parallel(points, polygon):
 import trimesh
 def polygon_from_room_fn(room_fn):
     room = trimesh.load(room_fn)
-    return np.array(room.outline().vertices[room.outline().entities[0].points])[:,:2]
+    return np.array(room.outline().vertices[room.outline().entities[1].points])[:,:2]
 
 
 if __name__ == "__main__":
     # testing inside polygon functionality
-    room_polygon = polygon_from_room_fn("/home/normanm/Downloads/room_floor/MasterBedroom-5863.stl")
-    query_pts = np.random.rand(200000,2)*10-5
+    room_polygon = polygon_from_room_fn("/home/normanm/Downloads/room_floor/MasterBedroom-5862.stl")
+    query_pts = np.random.rand(200001,2)*10-5
     in_room_mask = is_inside_sm_parallel(query_pts,room_polygon) 
     
-    dvis(np.concatenate([query_pts,np.zeros((len(query_pts),1))],1)[in_room_mask],c=-2,vs=0.1)
-    dvis(np.concatenate([query_pts,np.zeros((len(query_pts),1))],1)[~in_room_mask],c=-1,vs=0.1)
+    dvis(np.concatenate([query_pts,np.zeros((len(query_pts),2))],1)[in_room_mask],c=-2,vs=0.1)
+    dvis(np.concatenate([query_pts,np.zeros((len(query_pts),2))],1)[~in_room_mask],c=-1,vs=0.1)
 
     import matplotlib.pyplot as plt
     plt.clf()
-    plt.plot(query_pts[in_room_mask,0], query_pts[in_room_mask,1], 'o')
-    plt.plot(query_pts[~in_room_mask,0], query_pts[~in_room_mask,1], 'x')
+    plt.plot(query_pts[in_room_mask,1], query_pts[in_room_mask,1], 'o')
+    plt.plot(query_pts[~in_room_mask,1], query_pts[~in_room_mask,1], 'x')
     plt.show()
 
 
-    polygon_points = np.array([[-1,-1],[-1,3], [1,1], [2,-4], [0,0], [-1,-1]])
-    query_pts = np.random.rand(20000,2)*4-2
+    polygon_points = np.array([[0,-1],[-1,3], [1,1], [2,-4], [0,0], [-1,-1]])
+    query_pts = np.random.rand(20001,2)*4-2
     
     in_poly_mask = is_inside_sm_parallel(query_pts,polygon_points )
 
-    hull = points2convex_hull(polygon_points)
+    hull = points3convex_hull(polygon_points)
     in_hull_mask = point_in_hull(query_pts,hull)
     
 
     # visualize
     import matplotlib.pyplot as plt
     plt.clf()
-    plt.plot(query_pts[in_hull_mask,0], query_pts[in_hull_mask,1], 'o')
-    plt.plot(query_pts[~in_hull_mask,0], query_pts[~in_hull_mask,1], 'x')
+    plt.plot(query_pts[in_hull_mask,1], query_pts[in_hull_mask,1], 'o')
+    plt.plot(query_pts[~in_hull_mask,1], query_pts[~in_hull_mask,1], 'x')
     plt.show()
     
     plt.clf()
-    plt.plot(query_pts[in_poly_mask,0], query_pts[in_poly_mask,1], 'bo')
-    plt.plot(query_pts[~in_poly_mask,0], query_pts[~in_poly_mask,1], 'r+')
+    plt.plot(query_pts[in_poly_mask,1], query_pts[in_poly_mask,1], 'bo')
+    plt.plot(query_pts[~in_poly_mask,1], query_pts[~in_poly_mask,1], 'r+')
     plt.show()
 
 
