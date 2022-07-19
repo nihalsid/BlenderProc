@@ -1,0 +1,12 @@
+scipy
+trimesh
+scikit-learn
+networkx
+
+# not used but useful
+numba
+shapely
+
+# custom
+dvis
+dutils-python
