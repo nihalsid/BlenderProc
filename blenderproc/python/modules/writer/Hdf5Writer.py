@@ -18,6 +18,7 @@ import pickle
 # import pydevd_pycharm
 # pydevd_pycharm.settrace('localhost', port=12345, stdoutToServer=True, stderrToServer=True)
 
+
 class Hdf5Writer(WriterInterface):
     """ For each key frame merges all registered output files into one hdf5 file.
 
@@ -67,19 +68,22 @@ class Hdf5Writer(WriterInterface):
         else:
             frame_offset = 0
 
+        with open(self.config.get_string("json_path"), 'r') as front_json:
+            front_anno = json.load(front_json)
+            scene_name = front_anno['uid']
+
         if self.config.get_bool('export_blender', fallback=False):
-            with open(self.config.get_string("json_path"), 'r') as front_json:
-                    front_anno = json.load(front_json)
-                    scene_name = front_anno['uid']
             output_folder = f"{self._output_dir}/{scene_name}/mesh"
             Path(output_folder).mkdir(exist_ok=True, parents=True)
             bpy.ops.wm.save_as_mainfile(filepath=str(Path(output_folder) / "scene.blend"))
+
+        Path(f"{self._output_dir}/{scene_name}").mkdir(exist_ok=True, parents=True)
 
         # Go through all frames
         for frame in range(bpy.context.scene.frame_start, bpy.context.scene.frame_end):
 
             # Create output hdf5 file
-            hdf5_path = os.path.join(self._output_dir, str(frame + frame_offset) + ".hdf5")
+            hdf5_path = os.path.join(self._output_dir, scene_name, str(frame + frame_offset) + ".hdf5")
             with h5py.File(hdf5_path, "w") as f:
 
                 if not GlobalStorage.is_in_storage("output"):
@@ -134,10 +138,6 @@ class Hdf5Writer(WriterInterface):
 
             # convert h5py to mainer format
             if self.config.get_bool('convert_to_mainer', fallback=False):
-                with open(self.config.get_string("json_path"), 'r') as front_json:
-                    front_anno = json.load(front_json)
-                    scene_name = front_anno['uid']
-
                 output_folder = f"{self._output_dir}/{scene_name}"
                 frame_idx = int(os.path.basename(hdf5_path).split('.')[0])
 
