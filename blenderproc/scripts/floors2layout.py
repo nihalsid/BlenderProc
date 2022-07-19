@@ -1,5 +1,5 @@
 from scipy.interpolate import interp1d
-from dutils import rot_mat, trans_mat
+from dutils import rot_mat, trans_mat, dot, hmg
 from trimesh.proximity import ProximityQuery
 from scipy import interpolate
 from scipy.ndimage import binary_dilation, generate_binary_structure
@@ -14,7 +14,6 @@ from dvis import dvis
 from pathlib import Path
 import shapely
 import networkx as nx
-from dutils import dot, hmg
 import pickle
 
 import hashlib
@@ -775,6 +774,34 @@ def get_complete_traj(vfront_root: str,  vox_size=0.15, min_height_v=2, max_heig
         compl_meta.append(meta)
 
     compl_trajectory = np.concatenate(compl_trajectory)
+    # additional visualization
+    # for sanity checking afterwards
+    if False:
+        sl_vox_scene_mesh = sl_scene_mesh.copy()
+        sl_vox_scene_mesh.vertices = dot(np.linalg.inv(sl_vox2scene),sl_vox_scene_mesh.vertices)
+        dvis(sl_vox_scene_mesh, name="sl_vox_scene_mesh", l=1)
+
+        # dvis(occ_vox[...,:max_height_v],c=0, name="occ_vox", l=1)
+        dvis(dil_occ_vox[...,:max_height_v],c=-1,l=2, name="dil_occ_vox")
+        for id_vox in np.unique(sl_occ_room_id_vox):
+            if id_vox>=0:
+               dvis(np.argwhere(sl_occ_room_id_vox==id_vox), c=int(id_vox)+1, name=f"sl_occ/{id_vox}", l=3)
+
+        for idx_a, room_id_a in enumerate(sl_room_ids):
+            for idx_b, room_id_b in enumerate(sl_room_ids[idx_a+1:]):
+                # get source and target as graph indices
+                sample_ind_a = sl_room_sample_inds[room_id_a]
+                sample_ind_b = sl_room_sample_inds[room_id_b]
+                source = int(
+                    np.where(np.all(sl_free_vox_inds == sample_ind_a, 1))[0])
+                target = int(
+                    np.where(np.all(sl_free_vox_inds == sample_ind_b, 1))[0])
+                a_path = nx.astar_path(sl_free_G, source=source, target=target)
+                dvis(sl_free_vox_inds[a_path],c=idx_a, name=f"path/{idx_a}", l=4)
+
+        for room_id in np.unique(compl_meta[:,0]):
+            room_mask = (compl_meta[:,0] == room_id) & compl_meta[:,1] >=0
+            dvis(trs2f_vec(compl_trajectory)[room_mask],'vec',vs=0.5,c=int(room_id), name=f"room/{int(room_id)}", l=5)
     # convert back into scene space
     # preserve rotation (no scaling on this)
     compl_trajectory[:,:3,3] = dot(sl_vox2scene, compl_trajectory[:,:3,3])
@@ -784,12 +811,15 @@ def get_complete_traj(vfront_root: str,  vox_size=0.15, min_height_v=2, max_heig
     return compl_trajectory, compl_meta
 
 
+
+
+
 if __name__ == "__main__":
     # testing inside polygon functionality
     # scene_layout = get_scene_layout("/home/normanm/fb_data/renders_front3d_debug/0003d406-5f27-4bbf-94cd-1cff7c310ba1")
     # testing voxelization
     scene_name = "/home/normanm/fb_data/renders_front3d_debug/0003d406-5f27-4bbf-94cd-1cff7c310ba1"
-    # scene_name ="/home/normanm/fb_data/renders_front3d_debug/00154c06-2ee2-408a-9664-b8fd74742897"
+    scene_name ="/home/normanm/fb_data/renders_front3d_debug/00154c06-2ee2-408a-9664-b8fd74742897"
     traj_mode = 'tiktok'
     suffix = "direct"
     suffix = "tiktok"

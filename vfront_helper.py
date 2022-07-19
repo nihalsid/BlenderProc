@@ -18,16 +18,19 @@ def visualize_depth(depth, img_ijs=None, H=None,W=None, cmap=cv2.COLORMAP_JET):
         x = depth.cpu().numpy()
     else:
         x = depth
-    x = np.nan_to_num(x)  # change nan to 0
+    # convert invalid depth vals to 0
+    x[np.isinf(x)] = 0
+    x[np.isneginf(x)] = 0
     mi = np.min(x)  # get minimum depth
     ma = np.max(x)
+    print(mi, ma)
     x = (x - mi) / max(ma - mi, 1e-8)  # normalize to 0~1
     x = (255 * x).astype(np.uint8)
     if img_ijs is not None:
         depth_img = np.zeros((H, W), dtype=np.uint8)
         depth_img[tuple(img_ijs.T)] = x
         x = depth_img
-    x_ = Image.fromarray(cv2.applyColorMap(depth_img, cmap))
+    x_ = Image.fromarray(cv2.applyColorMap(x, cmap))
     x_ = T.ToTensor()(x_)  # (3, H, W)
     return x_
 
