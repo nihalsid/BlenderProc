@@ -7,7 +7,8 @@ import glob
 from dutils import dot
 from vfront_helper import unproject_2d_3d, visualize_label, visualize_depth
 
-root_dir = "/home/normanm/fb_data/renders_front3d_tiktok2/0003d406-5f27-4bbf-94cd-1cff7c310ba1"
+# root_dir = "/home/normanm/fb_data/renders_front3d_tiktok2/0003d406-5f27-4bbf-94cd-1cff7c310ba1"
+root_dir = "/home/normanm/fb_data/renders_front3d_tiktok2/00154c06-2ee2-408a-9664-b8fd74742897"
 # get frame_inds for now like this
 # TODO scene_annotation.pkl
 frame_inds = [int(fn.split('/')[-1].split('.')[0]) for fn in glob.glob(f"{root_dir}/annotation/*.pkl")]
