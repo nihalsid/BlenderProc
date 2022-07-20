@@ -44,6 +44,27 @@ def idx2d_1d(idx_2d, W):
 def idx1d_2d(idx_2d,W):
     return torch.stack([idx_2d//W, idx_2d%W],1)
 
+
+def blender2py3d(c2w):
+    swap_y_z = np.array([[1, 0, 0, 0],
+                     [0, 0, -1, 0],
+                     [0, -1, 0, 0],
+                     [0, 0, 0, 1]])
+
+    deg180 = np.deg2rad(180)
+    rot_z = np.array([[np.cos(deg180), -np.sin(deg180), 0],
+            [np.sin(deg180), np.cos(deg180), 0],
+            [0, 0, 1]])
+
+    c2w = swap_y_z @ c2w
+
+    t = c2w[:3,-1]  # Extract translation of the camera
+    r = c2w[:3, :3] @ rot_z # Extract rotation matrix of the camera
+
+    t = t @ r # Make rotation local
+    return r,t
+
+
 device = "cuda"
 
 scene_name ="/home/normanm/fb_data/renders_front3d_debug/00154c06-2ee2-408a-9664-b8fd74742897"
@@ -53,14 +74,7 @@ vfront_root = scene_name
 
 scene_mesh_fn = Path(vfront_root, "mesh", "mesh.obj")
 scene_mesh = trimesh.load(scene_mesh_fn, force='mesh')
-tm_vox = scene_mesh.voxelized(vox_size)
-vox2scene = np.array(tm_vox.transform)
-dvis(dot(vox2scene,tm_vox.sparse_indices),vs=vox_size)
-
-vox_scene_mesh = scene_mesh.copy()
-vox_scene_mesh.vertices = dot(np.linalg.inv(vox2scene),vox_scene_mesh.vertices)
-dvis(vox_scene_mesh, name="vox_scene_mesh", l=1)
-
+dvis(scene_mesh)
 from vfront_helper import visualize_depth
 
 from pytorch3d.renderer import RasterizationSettings, MeshRasterizer, FoVPerspectiveCameras,  \
@@ -87,9 +101,16 @@ raster_settings = RasterizationSettings(
     blur_radius=0.0, 
     faces_per_pixel=1, 
 )
-cam2world = torch.tensor([[1,0,0,0],[0,1,0,2],[0,0,1,0],[0,0,0,1]],device=device).float()
-cam2world_py3d =  cam2world @ torch.from_numpy(np.diag([1, -1, -1, 1])).float().to(device)
-R,T = cam2world_py3d[:3,:3].unsqueeze(0), cam2world_py3d[:3,3].unsqueeze(0)
+
+swap_x_y = torch.tensor([[0, 1, 0, 0],
+                     [1, 0, 0, 0],
+                     [0, 0, 1, 0],
+                     [0, 0, 0, 1.0]],device=device)
+
+cam2world =  torch.tensor([[1,0,0,-2],[0,1,0,1],[0,0,1,-2],[0,0,0,1]],device=device).float() # @hmg(rot_mat([1,0,0],np.pi/5)).to(device) 
+
+R = cam2world[:3,:3].unsqueeze(0)
+T = dot(torch.inverse(cam2world[:3,:3]), - cam2world[:3,3]).unsqueeze(0)
 cameras = FoVPerspectiveCameras(device=device, R=R, T=T)
 
 lights = PointLights(device=device, location=[[0.0, 0.0, -3.0]])
@@ -107,6 +128,55 @@ renderer = MeshRenderer(
 
 images = renderer(mesh)
 dvis(images[0,:,:,:3],'img')
+dvis(cam2world,name="org/a")
+dvis(cam2world_py3d,name="py/a")
+
+
+def convert_py3d(cam2world):
+    R = cam2world[:3,:3].unsqueeze(0)
+    T = dot(torch.inverse(cam2world[:3,:3]), - cam2world[:3,3]).unsqueeze(0)
+    return R, T
+
+
+def render_rgb(mesh, cam2world, raster_settings):
+    device = cam2world.device
+    R, T = convert_py3d(cam2world)
+    cameras = FoVPerspectiveCameras(device=device, R=R, T=T)
+
+    lights = PointLights(device=device, location=[[0.0, 0.0, 0.0]])
+    renderer = MeshRenderer(
+        rasterizer=MeshRasterizer(
+            cameras=cameras, 
+            raster_settings=raster_settings
+        ),
+        shader=HardFlatShader(
+            device=device, 
+            cameras=cameras,
+            lights=lights
+        )
+    )
+    images = renderer(mesh)
+    return images[0,...,:3]
+
+
+def render_depth(mesh, cam2world, raster_settings):
+    device = cam2world.device
+    R, T = convert_py3d(cam2world)
+    cameras = FoVPerspectiveCameras(device=device, R=R, T=T)
+    rasterizer = MeshRasterizer(
+        cameras=cameras, 
+        raster_settings=raster_settings
+    )
+    fragments = rasterizer(mesh)
+    depth = fragments.zbuf[0,...,0].flip(0).flip(1)
+    return depth
+
+def get_depth_pts(mesh, cam2world, K, raster_settings):
+    depth = render_depth(mesh,cam2world,raster_settings)
+    pts = unproject_2d_3d(cam2world,K,depth)
+    pts = pts[depth.flatten()>0]
+    return pts
+
 
 fl_factor= 1/(np.tan(float(cameras.fov)/2*np.pi/180)*2)
 H = raster_settings.image_size
@@ -116,27 +186,23 @@ K = torch.tensor([[fl_factor*W, 0, W/2],[0,fl_factor*H,H/2],[0,0,1]],device=devi
 
 from dutils import rot_mat, hmg
 
-cam2world = (hmg(rot_mat([0,1,0],np.pi/5)).to(device) @ torch.tensor([[1,0,0,3],[0,1,0,-0.5],[0,0,1,0],[0,0,0,1]],device=device)).float()
-cam2world = cam2world
-cam2world_py3d =    cam2world #@ torch.from_numpy(np.diag([-1, -1, 1, 1])).float().to(device) 
-R,T = cam2world_py3d[:3,:3].unsqueeze(0), cam2world_py3d[:3,3].unsqueeze(0)
-
+cam2world =  torch.tensor([[1,0,0,2],[0,1,0,1],[0,0,1,0],[0,0,0,1]],device=device).float() @hmg(rot_mat([1,0,0],np.pi/5)).to(device) 
+R, T = convert_py3d(cam2world)
 cameras = FoVPerspectiveCameras(device=device, R=R, T=T)
 rasterizer = MeshRasterizer(
     cameras=cameras, 
     raster_settings=raster_settings
 )
 fragments = rasterizer(mesh)
-depth = fragments.zbuf[0,...,0]
+depth = fragments.zbuf[0,...,0].flip(0).flip(1)
 
-
-
-
-pts = unproject_2d_3d(torch.from_numpy(np.diag([-1, -1, 1, 1])).float().to(device)@cam2world_py3d,K,depth)
+pts = unproject_2d_3d(cam2world,K,depth)
 pts = pts[depth.flatten()>0]
 dvis(pts,vs=0.03,c=3,ms=20000,name="pts/as")
 dvis(cam2world)
 dvis(visualize_depth(depth.cpu().numpy()),'img')
+
+
 
 
 Rs = []
