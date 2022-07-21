@@ -13,7 +13,7 @@ from pathlib import Path
 import networkx as nx
 import pickle
 from tqdm import tqdm
-from coverage_helper import get_cam_obs_coords, load_mesh_py3d, greedy_select, fov2K, get_render_conf_py3d, get_max_view_state
+from coverage_helper import int_hash, get_cam_obs_coords, load_mesh_py3d, greedy_select, fov2K, get_render_conf_py3d, get_max_view_state
 import torch
 from nx_convert_matrix import from_scipy_sparse_array
 
@@ -122,7 +122,7 @@ def create_room_trajectory(sl_room_occ_mask, sl_room_free_mask, init_sample_mode
             num_valid_samples), num_cam_samples, p=valid_dists/np.sum(valid_dists))
  
 
-def create_room_traj_by_coverage(room_occ_mask,  room_free_mask, mesh_py3d, raster_settings, fov, K, scene2vox, cam_min_dist_v=3):
+def create_room_traj_by_coverage(room_occ_mask,  room_free_mask, mesh_py3d, raster_settings, fov, K, scene2vox, cam_min_dist_v=3, method="dim_ret", num_cand_samples=1000, num_score_samples=None, global_view_obs_state=None):
     # get padded free space based on distance to occ
     device = room_occ_mask.device
     room_occ_inds = torch.nonzero(room_occ_mask)
@@ -134,9 +134,17 @@ def create_room_traj_by_coverage(room_occ_mask,  room_free_mask, mesh_py3d, rast
     # num of samples based on valid region size
     num_valid_samples = valid_room_inds.shape[0]
 
+
+    if num_score_samples is None:
+        # use heuristic to determine how many scored sample should be used
+        min_samples = 30
+        max_samples = 500
+        sample_devisor = 40
+        num_score_samples = 2*max(min_samples, min(
+            int(num_valid_samples/sample_devisor), max_samples))
+
     # get best coverage poses from random poses
     # 1. sample random valid camera poses
-    num_cand_samples = 1000
     pitch_deg_range = [-20,10]
     pitch_ang_range = [x*np.pi/180 for x in pitch_deg_range]
     cand_locs = dot(torch.inverse(scene2vox), valid_room_inds[np.random.randint(0, num_valid_samples,num_cand_samples)].float())
@@ -154,30 +162,55 @@ def create_room_traj_by_coverage(room_occ_mask,  room_free_mask, mesh_py3d, rast
         cand_cam_obs_coord = get_cam_obs_coords(mesh_py3d,cam2world, fov, K,scene2vox,raster_settings,room_occ_mask)
         cand_cam_obs_coords.append(cand_cam_obs_coord)
     # greedily select cameras based on score
-    num_score_samples = 50
-    method = "view_bin_th" # "obs_th"
     view_bin_th = 4
 
-    global_view_obs_state = torch.zeros((*room_occ_mask.shape,8),device=room_occ_mask.device)
+    if global_view_obs_state is None:
+        global_view_obs_state = torch.zeros((*room_occ_mask.shape,8),device=room_occ_mask.device)
+    else:
+        # for validation we use the train obs state to evaluate candidate val poses
+        pass 
     best_cand_inds = greedy_select(global_view_obs_state,cand_cam_obs_coords, num_score_samples,method,view_bin_th=view_bin_th)
     best_c2ws = cand_c2ws[best_cand_inds]
     # compute obs_th=1 overage 
     best_cand_cam_obs_coords = [cand_cam_obs_coords[best_cand_idx].cpu() for best_cand_idx in best_cand_inds]
-    best_cov_ratio = torch.any(global_view_obs_state,dim=-1).sum() / room_occ_mask.sum()
+    # best_cov_ratio = torch.any(global_view_obs_state,dim=-1).sum() / room_occ_mask.sum()
 
-    max_global_view_obs_state = torch.zeros((*room_occ_mask.shape,8),device=room_occ_mask.device)
-    max_global_view_obs_state = get_max_view_state(max_global_view_obs_state,cand_cam_obs_coords, view_bin_th=view_bin_th)
+    # max_global_view_obs_state = torch.zeros((*room_occ_mask.shape,8),device=room_occ_mask.device)
+    # max_global_view_obs_state = get_max_view_state(max_global_view_obs_state,cand_cam_obs_coords, view_bin_th=view_bin_th)
 
-    # maximum possible (thresholded) based on all views vs actual observation level
-    coverage_ratio = 1- (max_global_view_obs_state -torch.clamp(global_view_obs_state,0,view_bin_th)).sum() / max_global_view_obs_state.sum()
+    # # maximum possible (thresholded) based on all views vs actual observation level
+    # coverage_ratio = 1- (max_global_view_obs_state - torch.clamp(global_view_obs_state,0,view_bin_th)).sum() / max_global_view_obs_state.sum()
+    # obs_th = 4
+    # obs_coverage_ratio = 1 - (torch.clamp(max_global_view_obs_state.sum(-1),0,obs_th) - torch.clamp(global_view_obs_state.sum(-1),0,obs_th)).sum() / torch.clamp(max_global_view_obs_state.sum(-1),0,obs_th).sum()
+    # return best_c2ws, best_cand_cam_obs_coords, global_view_obs_state.cpu(), coverage_ratio, obs_coverage_ratio
+    return best_c2ws, best_cand_cam_obs_coords, global_view_obs_state
 
-    return best_c2ws, best_cand_cam_obs_coords, global_view_obs_state.cpu, coverage_ratio
+
+def transform_dist_mat(T1, T2, trans_th=0.1, rot_th=5):
+    trans1, trans2 = T1[:,:3,3], T2[:,:3,3]
+    f1, f2 = T1[:,:3,2], T2[:,:3,2]
+    if isinstance(T1, torch.Tensor):
+        trans_dist = torch.cdist(trans1, trans2)
+        f1 = f1/torch.norm(f1,dim=1,p=2)[:,None]
+        f2 = f2/torch.norm(f2,dim=1, p=2)[:,None]
+        rot_dist = torch.acos(torch.clamp(torch.einsum('ik,jk->ij', f1, f2),-1,1))*180/np.pi
+        total_dist = trans_dist/trans_th + rot_dist/rot_th
+    return total_dist
+
+
+def get_best_order(T, trans_th=0.1, rot_th=5):
+    # trans_th in m (scene), rot_th in degrees 
+    dist_mat = transform_dist_mat(T,T, trans_th, rot_th=rot_th)
+    cam_key_G = nx.from_numpy_array(dist_mat.cpu().numpy())
+    tsp_sol = nx.approximation.traveling_salesman_problem(cam_key_G)
+    return tsp_sol
 
 
 
 
 def create_complete_trajectory(vfront_root: str, vox_size=0.15, min_dist=0.1, min_height=0.2, max_height=2.0, cam_min_dist=0.2, cov_vox_size=None):
     ### load scene and voxelize it
+    scene_name = Path(vfront_root).stem
     scene_mesh_fn = Path(vfront_root, "mesh", "mesh.obj")
     scene_mesh, occ_vox, dil_occ_vox, vox2scene = load_scene_volumes(scene_mesh_fn, vox_size, min_dist)
  
@@ -312,13 +345,31 @@ def create_complete_trajectory(vfront_root: str, vox_size=0.15, min_dist=0.1, mi
         raster_settings, K = get_render_conf_py3d(H,fov,device)
         # compute coverage at different voxel size compared to path etc calc
 
-        # occ_room_id_vox_py3d = 
-
+        room_sample_data = dict()
         for sl_room_id in sl_room_ids:
             room_occ_mask = cov_occ_room_id_vox == sl_room_id
             room_free_mask = cov_free_room_id_vox_cc == sl_room_id
-            
-            best_c2ws, best_cand_cam_obs_coords, global_view_obs_state, coverage_ratio = create_room_traj_by_coverage(room_occ_mask, room_free_mask,  mesh_py3d, raster_settings, fov, K, scene2cov_vox, cam_min_dist_v=3)
+            torch.manual_seed(int_hash(f"train_{scene_name}/{sl_room_id}"))
+            train_c2ws, train_cam_obs_coords, train_global_view_obs_state = create_room_traj_by_coverage(room_occ_mask, room_free_mask,  mesh_py3d, raster_settings, fov, K, scene2cov_vox, cam_min_dist_v=3,num_cand_samples=1000)
+            # re-order based on transform distance
+            train_best_order = get_best_order(train_c2ws,trans_th=0.1, rot_th=5)
+            train_c2ws = train_c2ws[train_best_order]
+            train_cam_obs_coords = train_cam_obs_coords[train_best_order]
+
+            num_val_score_samples = int(0.2*len(train_c2ws))
+            torch.manual_seed(int_hash(f"val_{scene_name}/{sl_room_id}"))
+            val_c2ws, val_cam_obs_coords, _ = create_room_traj_by_coverage(room_occ_mask, room_free_mask,  mesh_py3d, raster_settings, fov, K, scene2cov_vox, cam_min_dist_v=3,num_cand_samples=200,num_score_samples=num_val_score_samples, global_view_obs_state=train_global_view_obs_state.clone())
+            # re-order based on transform distance
+            val_best_order = get_best_order(val_c2ws,trans_th=0.1, rot_th=5)
+            val_c2ws = val_c2ws[val_best_order]
+            val_cam_obs_coords = val_cam_obs_coords[val_best_order]
+
+            room_sample_data[sl_room_id] = {
+                "train": {"c2w": train_c2ws.cpu(), "cam_obs_coords": train_cam_obs_coords.cpu()},
+                "val": {"c2w": val_c2ws.cpu(), "cam_obs_coords": val_cam_obs_coords.cpu()},
+            }
+    else:
+        raise NotImplementedError()
 
         
     for sl_room_id in sl_room_ids:
