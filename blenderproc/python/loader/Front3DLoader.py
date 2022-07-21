@@ -563,6 +563,7 @@ class Front3DLoader:
                             new_obj.set_cp("unique_uid", f"{obj.get_cp('uid')}/{instance_counter[obj.get_cp('uid')]:03d}")
                             new_obj.set_cp("type", "Object")  # is an object used for the interesting score
                             new_obj.set_cp("coarse_grained_class", new_obj.get_cp("category_id"))
+
                             # this flips the y and z coordinate to bring it to the blender coordinate system
                             new_obj.set_location(mathutils.Vector(child["pos"]).xzy)
                             new_obj.set_scale(child["scale"])
@@ -570,4 +571,8 @@ class Front3DLoader:
                             rotation_mat = mathutils.Quaternion(child["rot"]).to_euler().to_matrix().to_4x4()
                             # transform it into the blender coordinate system and then to an euler
                             new_obj.set_rotation_euler((blender_rot_mat @ rotation_mat).to_euler())
+                            new_obj.set_cp('bbox_scale', child["scale"])
+                            new_obj.set_cp('bbox_rotation', child["rot"])
+                            new_obj.set_cp('bbox_position', [child["pos"][0], child["pos"][2], child["pos"][1]])
+
         return created_objects

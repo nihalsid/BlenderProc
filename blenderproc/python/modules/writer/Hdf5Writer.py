@@ -73,13 +73,23 @@ class Hdf5Writer(WriterInterface):
             front_anno = json.load(front_json)
             scene_name = front_anno['uid']
 
+        Path(f"{self._output_dir}/{scene_name}").mkdir(exist_ok=True, parents=True)
+
         if self.config.get_bool('export_blender', fallback=False):
             output_folder = f"{self._output_dir}/{scene_name}/mesh"
             Path(output_folder).mkdir(exist_ok=True, parents=True)
             bpy.ops.wm.save_as_mainfile(filepath=str(Path(output_folder) / "scene.blend"))
 
-        Path(f"{self._output_dir}/{scene_name}").mkdir(exist_ok=True, parents=True)
-
+        output_poses_path =  f"{self._output_dir}/{scene_name}/poses.json"
+        poses = {}
+        for obj in bpy.data.objects:
+            if 'unique_uid' in obj:
+                poses[obj['unique_uid']] = {
+                    'scale': obj['bbox_scale'].to_list(),
+                    'rotation': obj['bbox_rotation'].to_list(),
+                    'position': obj['bbox_position'].to_list()
+                }
+        Path(output_poses_path).write_text(json.dumps(poses))
 
         # global across frames
         running_unique_uid2asset_id = dict()
@@ -142,8 +152,6 @@ class Hdf5Writer(WriterInterface):
 
             # convert h5py to mainer format
             if self.config.get_bool('convert_to_mainer', fallback=False):
-
-                from blenderproc.scripts.convertHdf5 import convert_hdf5
 
                 convert_hdf5(hdf5_path, front_anno, running_unique_uid2asset_id, self._output_dir)
 
