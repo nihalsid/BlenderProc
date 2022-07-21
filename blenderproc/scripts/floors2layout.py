@@ -110,7 +110,7 @@ def _get_scene_layout(vfront_root):
         if "OtherRoom" in room_name:
             # TODO Deal with OtherRoom at generation
             continue
-        room_polygons = room_floor2polygons(room_floor_fn)
+        room_polygons = _room_floor2polygons(room_floor_fn)
         scene_layout[room_name] = room_polygons
     # keep sorted so name-> idx = room_id
     scene_layout = {room_name: scene_layout[room_name]
