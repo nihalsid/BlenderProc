@@ -2,6 +2,7 @@ scipy
 trimesh
 scikit-learn
 networkx
+rtree
 
 # not used but useful
 numba

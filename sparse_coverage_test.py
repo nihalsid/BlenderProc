@@ -174,13 +174,26 @@ def get_cam_obs_coords(mesh, cam2world, K, scene2vox):
     cam_pts_scene = get_depth_pts(mesh,cam2world,K,raster_settings)
     cam_pts_vox = dot(scene2vox, cam_pts_scene).int()
     view_bins = bin2dec(cam2world[:3,3][None,:] - cam_pts_scene>0,3)
-    cam_obs_coords = torch.cat([cam_pts_vox, view_bins[:,None]],1).long()
+    cam_obs_coords = torch.unique(torch.cat([cam_pts_vox, view_bins[:,None]],1).long(),dim=0)
     return cam_obs_coords
 
 def get_obs_score(global_view_obs_state, cam_obs_coords, method="view_bin_th", view_bin_th=None, obs_th=None):
     if method == 'view_bin_th':
         curr_state = global_view_obs_state[tuple(cam_obs_coords.T)]
         return int(torch.sum((curr_state + 1) <= view_bin_th))
+    elif method == "obs_th":
+        global_obs_state = global_view_obs_state.sum(-1)
+        curr_state = global_obs_state[tuple(cam_obs_coords[:,:3].T)]
+        return int(torch.sum((curr_state + 1) <= obs_th))
+    else:
+        raise NotImplementedError(f"Unknown method: {method}")
+
+from torch_scatter import scatter
+
+def get_obs_score_batched(global_view_obs_state, cam_obs_coords, batch_inds, method="view_bin_th", view_bin_th=None, obs_th=None):
+    if method == 'view_bin_th':
+        curr_state = global_view_obs_state[tuple(cam_obs_coords.T)]
+        return scatter(1*((curr_state + 1) <= view_bin_th), batch_inds,dim=-1, reduce="sum")
     elif method == "obs_th":
         global_obs_state = global_view_obs_state.sum(-1)
         curr_state = global_obs_state[tuple(cam_obs_coords[:,:3].T)]
@@ -206,10 +219,12 @@ def score_based_update(global_view_obs_state, mesh,K,scene2vox, cand_cam2world,m
 
 ## randomly sample some views first
 
+torch.random.manual_seed(32)
+
 global_view_obs_state = torch.zeros((*tm_vox.shape,8),device=device)
-num_samples = 200# 1000
+num_samples = 20# 1000
 method = "view_bin_th"
-method = "obs_th"
+# method = "obs_th"
 view_bin_th = 3
 obs_th = 4
 num_rand_samples = 100
@@ -222,6 +237,76 @@ for i in tqdm(range(num_rand_samples)):
     cam_obs_coords = get_cam_obs_coords(mesh,cam2world,K,scene2vox)
     update_global_view_obs_state(global_view_obs_state,cam_obs_coords)
 ### now select based on score
+# store scores first
+global_view_obs_state = torch.zeros((*tm_vox.shape,8),device=device)
+num_rand_samples = 1000
+num_score_samples = 100
+cand_cam2world = []
+cand_cam_obs_coords = []
+### render obs_scoords first
+for i in tqdm(range(num_rand_samples)):
+    R = rot_mat([0,1,0], float(torch.rand(1))*2*np.pi).to(device)
+    T = torch.tensor([5*(torch.rand(1)-0.5),1,5*(torch.rand(1)-0.5)]).to(device)
+    cam2world = torch.eye(4,device=device)
+    cam2world[:3,:3] = R
+    cam2world[:3,3] = T
+
+    ## 
+    cam_obs_coords = get_cam_obs_coords(mesh,cam2world,K,scene2vox)
+    cand_cam2world.append(cam2world)
+    cand_cam_obs_coords.append(cam_obs_coords)
+
+
+if False:
+    # slower iterative version
+    cand_cam_obs_coords2 = [torch.clone(x) for x in cand_cam_obs_coords]
+    cand_cam2world2 = [torch.clone(x) for x in cand_cam2world]
+    global_view_obs_state2 = torch.clone(global_view_obs_state)
+    ### greedy select based on score 
+    selected_cam2world2 = []
+    for i in tqdm(range(num_score_samples)):
+        # go over all remaining again 
+        cand_scores = []
+        for cam_obs_coords in cand_cam_obs_coords2:
+            cand_score = get_obs_score(global_view_obs_state2,cam_obs_coords,method,view_bin_th=view_bin_th, obs_th=obs_th)
+            cand_scores.append(cand_score)
+        if method in ['view_bin_th', "obs_th"]:
+            # try maximizing
+            best_cand_idx = np.argmax(cand_scores)
+            print(best_cand_idx)
+        update_global_view_obs_state(global_view_obs_state2,cand_cam_obs_coords2[best_cand_idx])
+        selected_cam2world2.append(cand_cam2world2[best_cand_idx])
+        # delete the best
+        del cand_cam_obs_coords2[best_cand_idx]
+        del cand_cam2world2[best_cand_idx]
+
+
+# batched version
+### greedy select based on score 
+selected_cam2world = []
+
+b_cand_cam_obs_coords = torch.cat(cand_cam_obs_coords)
+batch_inds = torch.cat([i*torch.ones(len(x), device=device) for i,x in enumerate(cand_cam_obs_coords)]).int()
+for i in tqdm(range(num_score_samples)):
+    # go over all remaining again 
+    cand_scores = get_obs_score_batched(global_view_obs_state, b_cand_cam_obs_coords, batch_inds.long(),method,view_bin_th=view_bin_th, obs_th=obs_th)
+    # NOTE: It still has a score for all batch_idx from 0 -> num_score_samples
+    if method in ['view_bin_th', "obs_th"]:
+        # try maximizing
+        best_cand_idx = int(torch.argmax(cand_scores))
+        print(best_cand_idx)
+    update_global_view_obs_state(global_view_obs_state,cand_cam_obs_coords[best_cand_idx])
+    selected_cam2world.append(cand_cam2world[best_cand_idx])
+    # delete the best
+    b_cand_cam_obs_coords= b_cand_cam_obs_coords[batch_inds!=best_cand_idx]
+    batch_inds = batch_inds[batch_inds!=best_cand_idx]
+
+
+
+
+
+
+# simple
 num_score_samples = 300
 num_cand = 20
 for i in tqdm(range(num_score_samples)):
