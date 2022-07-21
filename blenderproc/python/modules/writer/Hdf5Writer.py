@@ -153,8 +153,6 @@ class Hdf5Writer(WriterInterface):
             # convert h5py to mainer format
             if self.config.get_bool('convert_to_mainer', fallback=False):
 
-                from blenderproc.scripts.convertHdf5 import convert_hdf5
-
                 convert_hdf5(hdf5_path, front_anno, running_unique_uid2asset_id, self._output_dir)
 
                 # output_folder = f"{self._output_dir}/{scene_name}"
