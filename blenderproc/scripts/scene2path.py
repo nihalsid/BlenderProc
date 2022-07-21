@@ -139,8 +139,8 @@ def create_room_traj_by_coverage(room_occ_mask,  room_free_mask, mesh_py3d, rast
         # use heuristic to determine how many scored sample should be used
         min_samples = 30
         max_samples = 500
-        sample_devisor = 40
-        num_score_samples = 2*max(min_samples, min(
+        sample_devisor = 30
+        num_score_samples = max(min_samples, min(
             int(num_valid_samples/sample_devisor), max_samples))
 
     # get best coverage poses from random poses
@@ -201,8 +201,8 @@ def transform_dist_mat(T1, T2, trans_th=0.1, rot_th=5):
 def get_best_order(T, trans_th=0.1, rot_th=5):
     # trans_th in m (scene), rot_th in degrees 
     dist_mat = transform_dist_mat(T,T, trans_th, rot_th=rot_th)
-    cam_key_G = nx.from_numpy_array(dist_mat.cpu().numpy())
-    tsp_sol = nx.approximation.traveling_salesman_problem(cam_key_G)
+    G = nx.from_numpy_array(dist_mat.cpu().numpy()).to_undirected()
+    tsp_sol = nx.approximation.traveling_salesman_problem(G, method=nx.approximation.greedy_tsp)
     return tsp_sol
 
 
@@ -354,32 +354,28 @@ def create_complete_trajectory(vfront_root: str, vox_size=0.15, min_dist=0.1, mi
             # re-order based on transform distance
             train_best_order = get_best_order(train_c2ws,trans_th=0.1, rot_th=5)
             train_c2ws = train_c2ws[train_best_order]
-            train_cam_obs_coords = train_cam_obs_coords[train_best_order]
+            train_cam_obs_coords = [train_cam_obs_coords[i] for i in train_best_order]
 
             num_val_score_samples = int(0.2*len(train_c2ws))
             torch.manual_seed(int_hash(f"val_{scene_name}/{sl_room_id}"))
-            val_c2ws, val_cam_obs_coords, _ = create_room_traj_by_coverage(room_occ_mask, room_free_mask,  mesh_py3d, raster_settings, fov, K, scene2cov_vox, cam_min_dist_v=3,num_cand_samples=200,num_score_samples=num_val_score_samples, global_view_obs_state=train_global_view_obs_state.clone())
+            val_c2ws, val_cam_obs_coords, val_global_view_obs_state = create_room_traj_by_coverage(room_occ_mask, room_free_mask,  mesh_py3d, raster_settings, fov, K, scene2cov_vox, cam_min_dist_v=3,num_cand_samples=max(200,2*num_val_score_samples),num_score_samples=num_val_score_samples, global_view_obs_state=train_global_view_obs_state.clone())
             # re-order based on transform distance
             val_best_order = get_best_order(val_c2ws,trans_th=0.1, rot_th=5)
             val_c2ws = val_c2ws[val_best_order]
-            val_cam_obs_coords = val_cam_obs_coords[val_best_order]
+            val_cam_obs_coords = [val_cam_obs_coords[i] for i in val_best_order]
 
             room_sample_data[sl_room_id] = {
-                "train": {"c2w": train_c2ws.cpu(), "cam_obs_coords": train_cam_obs_coords.cpu()},
-                "val": {"c2w": val_c2ws.cpu(), "cam_obs_coords": val_cam_obs_coords.cpu()},
+                "train": {"c2w": train_c2ws.cpu(), "cam_obs_coords": train_cam_obs_coords},
+                "val": {"c2w": val_c2ws.cpu(), "cam_obs_coords": val_cam_obs_coords},
             }
+            #[dvis(train_global_view_obs_state.sum(-1)>i,t=i,c=2,name=f'train/{i}') for i in range(0,200,10)]
+            #[dvis(val_cam_obs_coords[i],t=i,c=3,name=f'val/{i}') for i in range(40)]
+            # [dvis(x.cpu()@ torch.from_numpy(np.diag([1,1,-1.0,1])).float(),'obj_kf',t=i, name='RenderCamera') for i,x in enumerate(train_c2ws)]
     else:
         raise NotImplementedError()
 
-        
-    for sl_room_id in sl_room_ids:
-        room_occ_mask = occ_room_id_vox == sl_room_id
-        sl_room_occ_mask = sl_occ_room_id_vox == sl_room_id
-        sl_room_free_mask = sl_free_room_id_vox_cc == sl_room_id
-        if "coverage" in init_sample_mode:
-            sel_cameras = create_room_traj_by_coverage(room_occ_mask, room_free_mask,  mesh_py3d, raster_settings, K, scene2vox, cam_min_dist_v=3)
-        else:
-            create_room_trajectory(sl_room_occ_mask, sl_room_free_mask, init_sample_mode=init_sample_mode,)
+    return room_sample_data
+  
 
 
 if __name__ == "__main__":
@@ -388,16 +384,15 @@ if __name__ == "__main__":
     # testing voxelization
     # scene_name = "/home/normanm/fb_data/renders_front3d_debug/0003d406-5f27-4bbf-94cd-1cff7c310ba1"
     scene_name ="/home/normanm/fb_data/renders_front3d_debug/00154c06-2ee2-408a-9664-b8fd74742897"
-    traj_mode = 'tiktok'
-    suffix = "direct"
-    suffix = "tiktok"
-    create_complete_trajectory(vfront_root=scene_name, vox_size=0.2, min_dist=0.1, min_height=0.2, max_height=2.0, cam_min_dist=0.2, cov_vox_size=0.12)
+    room_sample_data = create_complete_trajectory(vfront_root=scene_name, vox_size=0.2, min_dist=0.1, min_height=0.2, max_height=2.0, cam_min_dist=0.2, cov_vox_size=0.12)
     
-    
-    compl_trajectory, compl_meta = create_complete_trajectory(
-        scene_name, vox_size=0.15, min_height_v=2, max_height_v=13, traj_mode=traj_mode, conn_traj_mode="follow_2d")
-    dvis(compl_trajectory[:, :3, 3], 'line', vs=2)
-    dvis(trs2f_vec(compl_trajectory), "vec", c=-1, vs=3)
-    pickle.dump(compl_trajectory, open(
-        f"{scene_name}/compl_trajectory_2d_{suffix}.pkl", 'wb'))
-    pickle.dump(compl_meta, open(f"{scene_name}/compl_meta_2d_{suffix}.pkl", 'wb'))
+    pickle.dump(room_sample_data, open(
+        f"{scene_name}/room_sample_data.pkl", 'wb'))
+    print('lel')
+    # compl_trajectory, compl_meta = create_complete_trajectory(
+    #     scene_name, vox_size=0.15, min_height_v=2, max_height_v=13, traj_mode=traj_mode, conn_traj_mode="follow_2d")
+    # dvis(compl_trajectory[:, :3, 3], 'line', vs=2)
+    # dvis(trs2f_vec(compl_trajectory), "vec", c=-1, vs=3)
+    # pickle.dump(compl_trajectory, open(
+    #     f"{scene_name}/compl_trajectory_2d_{suffix}.pkl", 'wb'))
+    # pickle.dump(compl_meta, open(f"{scene_name}/compl_meta_2d_{suffix}.pkl", 'wb'))
