@@ -143,6 +143,8 @@ def create_room_traj_by_coverage(room_occ_mask,  room_free_mask, mesh_py3d, rast
         num_score_samples = max(min_samples, min(
             int(num_valid_samples/sample_devisor), max_samples))
 
+    num_cand_samples = min(num_cand_samples,3*num_score_samples)
+
     # get best coverage poses from random poses
     # 1. sample random valid camera poses
     pitch_deg_range = [-20,10]
@@ -365,8 +367,8 @@ def create_complete_trajectory(vfront_root: str, vox_size=0.15, min_dist=0.1, mi
             val_cam_obs_coords = [val_cam_obs_coords[i] for i in val_best_order]
 
             room_sample_data[sl_room_id] = {
-                "train": {"c2w": train_c2ws.cpu(), "cam_obs_coords": train_cam_obs_coords},
-                "val": {"c2w": val_c2ws.cpu(), "cam_obs_coords": val_cam_obs_coords},
+                "train": {"c2w": train_c2ws.cpu(), "cam_obs_coords": train_cam_obs_coords, "best_order": train_best_order},
+                "val": {"c2w": val_c2ws.cpu(), "cam_obs_coords": val_cam_obs_coords, "best_order": val_best_order},
             }
             #[dvis(train_global_view_obs_state.sum(-1)>i,t=i,c=2,name=f'train/{i}') for i in range(0,200,10)]
             #[dvis(val_cam_obs_coords[i],t=i,c=3,name=f'val/{i}') for i in range(40)]
