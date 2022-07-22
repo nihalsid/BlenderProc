@@ -9,7 +9,10 @@ from pytorch3d.renderer import RasterizationSettings, MeshRasterizer, FoVPerspec
 from pytorch3d.io import load_objs_as_meshes, load_obj
 from pytorch3d.structures import Meshes
 from dvis import dvis
+import hashlib
 
+def int_hash(x):
+    return int(hashlib.sha1(x.encode("utf-8")).hexdigest(), 16) % (10 ** 8)
 
 
 def unproject_2d_3d(cam2world, K, d, uv=None, th=None):
@@ -188,7 +191,7 @@ def get_obs_score(global_view_obs_state, cam_obs_coords, method="view_bin_th", v
         raise NotImplementedError(f"Unknown method: {method}")
 
 
-def get_obs_score_batched(global_view_obs_state, cam_obs_coords, batch_inds, method="view_bin_th", view_bin_th=None, obs_th=None):
+def get_obs_score_batched(global_view_obs_state, cam_obs_coords, batch_inds, method="dim_ret", view_bin_th=None, obs_th=None):
     if method == 'view_bin_th':
         curr_state = global_view_obs_state[tuple(cam_obs_coords.T)]
         return scatter(1*((curr_state + 1) <= view_bin_th), batch_inds,dim=-1, reduce="sum")
@@ -196,6 +199,9 @@ def get_obs_score_batched(global_view_obs_state, cam_obs_coords, batch_inds, met
         global_obs_state = global_view_obs_state.sum(-1)
         curr_state = global_obs_state[tuple(cam_obs_coords[:,:3].T)]
         return scatter(1*((curr_state + 1) <= obs_th), batch_inds,dim=-1, reduce="sum")
+    elif method == 'dim_ret':
+        curr_state = global_view_obs_state[tuple(cam_obs_coords.T)]
+        return scatter( 1- curr_state/(curr_state + 1), batch_inds, dim=-1, reduce="sum")
     else:
         raise NotImplementedError(f"Unknown method: {method}")
 
@@ -215,7 +221,7 @@ def score_based_update(global_view_obs_state, mesh,K,scene2vox, cand_cam2world,m
     return cand_cam2world[best_cand_idx], cand_scores[best_cand_idx]
 
 
-def greedy_select(global_view_obs_state, cand_cam_obs_coords, num_score_samples: int, method: str="view_bin_th",view_bin_th=None, obs_th=None):
+def greedy_select(global_view_obs_state, cand_cam_obs_coords, num_score_samples: int, method: str="dim_ret",view_bin_th=None, obs_th=None):
     # greedily selects best camera candidates based on score
     device = global_view_obs_state.device
     # batch all first, compute scores by reducing based on batch_idx
@@ -227,7 +233,7 @@ def greedy_select(global_view_obs_state, cand_cam_obs_coords, num_score_samples:
         # go over all remaining again 
         cand_scores = get_obs_score_batched(global_view_obs_state, b_cand_cam_obs_coords, batch_inds.long(),method,view_bin_th=view_bin_th, obs_th=obs_th)
         # NOTE: It still has a score for all batch_idx from 0 -> num_score_samples
-        if method in ['view_bin_th', "obs_th"]:
+        if method in ['view_bin_th', "obs_th", "dim_ret"]:
             # try maximizing
             best_cand_idx = int(torch.argmax(cand_scores))
         else:
