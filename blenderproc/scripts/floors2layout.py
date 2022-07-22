@@ -240,7 +240,7 @@ def equal_slerp(T1, T2, axis=2, max_angle=0.05, max_trans=1):
     return inter_trs
 
 
-def path_following_traj2d(inter_pts, max_rot_deg=10.0, max_f_deg=10.0, max_trans=1, temp=0.2, 
+def path_following_traj2d(inter_pts, max_rot_deg=10.0, max_f_deg=10.0, max_trans=1, temp=0.2,
     pitch_deg=20, yaw_deg=180, pitch_len=100, yaw_len=60, eps=1e-6, end_trs=None, cycle=True, start_trs=None):
 
     num_samples = len(inter_pts)
@@ -723,7 +723,7 @@ def get_complete_traj(vfront_root: str,  vox_size=0.15, min_height_v=2, max_heig
         # let interpolation handle the smooth transition
         # path_inds = np.concatenate([reord_room_trajectories[room_id_a][-1,:3,3][None,:],path_inds],0)
         num_samples = 3*len(path_inds)
-        tck, u = interpolate.splprep(tuple(path_inds.T), s=10)
+        tck, u = interpolate.splprep(tuple(path_inds.T), s=10, k=3 if len(tuple(path_inds.T)) > 3 else 2)
         sample_u = np.linspace(0, 1, num_samples, endpoint=True)
         inter_pts = np.stack(interpolate.splev(sample_u, tck), 1)
         # dvis(dot(sl_vox2scene, inter_pts),vs=vox_size)
@@ -818,15 +818,16 @@ if __name__ == "__main__":
     # testing inside polygon functionality
     # scene_layout = get_scene_layout("/home/normanm/fb_data/renders_front3d_debug/0003d406-5f27-4bbf-94cd-1cff7c310ba1")
     # testing voxelization
-    scene_name = "/home/normanm/fb_data/renders_front3d_debug/0003d406-5f27-4bbf-94cd-1cff7c310ba1"
-    scene_name ="/home/normanm/fb_data/renders_front3d_debug/00154c06-2ee2-408a-9664-b8fd74742897"
+    # scene_name = "/home/normanm/fb_data/renders_front3d_debug/0003d406-5f27-4bbf-94cd-1cff7c310ba1"
+    import sys
+    scene_name = sys.argv[1]
     traj_mode = 'tiktok'
     suffix = "direct"
     suffix = "tiktok"
     compl_trajectory, compl_meta = get_complete_traj(
         scene_name, vox_size=0.15, min_height_v=2, max_height_v=13, traj_mode=traj_mode, conn_traj_mode="follow_2d")
-    dvis(compl_trajectory[:, :3, 3], 'line', vs=2)
-    dvis(trs2f_vec(compl_trajectory), "vec", c=-1, vs=3)
+    #dvis(compl_trajectory[:, :3, 3], 'line', vs=2)
+    #dvis(trs2f_vec(compl_trajectory), "vec", c=-1, vs=3)
     pickle.dump(compl_trajectory, open(
         f"{scene_name}/compl_trajectory_2d_{suffix}.pkl", 'wb'))
     pickle.dump(compl_meta, open(f"{scene_name}/compl_meta_2d_{suffix}.pkl", 'wb'))
