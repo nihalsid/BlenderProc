@@ -15,7 +15,7 @@ for room_id, room_data in room_sample_data.items():
     split_idx.append(np.zeros(len(room_data['train']['c2w'])))
     compl_trajectory += room_data['val']['c2w']
     split_idx.append(np.ones(len(room_data['val']['c2w'])))
-    room_ids.append(np.ones(len(room_data['train']['c2w']) + len(room_data['val']['c2w'])))
+    room_ids.append(room_id * np.ones(len(room_data['train']['c2w']) + len(room_data['val']['c2w'])))
 
 compl_trajectory = np.stack(compl_trajectory)
 split_idx = np.concatenate(split_idx).astype(int)
