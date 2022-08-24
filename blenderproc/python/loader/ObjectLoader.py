@@ -34,7 +34,7 @@ def load_obj(filepath: str, cached_objects: Optional[Dict[str, List[MeshObject]]
             previously_selected_objects = bpy.context.selected_objects
             if filepath.endswith('.obj'):
                 # load an .obj file:
-                bpy.ops.import_scene.obj(filepath=filepath, **kwargs)
+                bpy.ops.wm.obj_import(filepath=filepath, **kwargs)
             elif filepath.endswith('.ply'):
                 # load a .ply mesh
                 bpy.ops.import_mesh.ply(filepath=filepath, **kwargs)
@@ -44,7 +44,18 @@ def load_obj(filepath: str, cached_objects: Optional[Dict[str, List[MeshObject]]
                 selected_objects = [obj for obj in bpy.context.selected_objects if obj not in previously_selected_objects]
                 for obj in selected_objects:
                     obj.data.materials.append(mat)
-
+            elif filepath.endswith('.dae'):
+                bpy.ops.wm.collada_import(filepath=filepath)
+            elif filepath.lower().endswith('.stl'):
+                # load a .stl file
+                bpy.ops.import_mesh.stl(filepath=filepath, **kwargs)
+                # add a default material to stl file
+                mat = bpy.data.materials.new(name="stl_material")
+                mat.use_nodes = True
+                selected_objects = [obj for obj in bpy.context.selected_objects if
+                                    obj not in previously_selected_objects]
+                for obj in selected_objects:
+                    obj.data.materials.append(mat)
             return convert_to_meshes(
                 [obj for obj in bpy.context.selected_objects if obj not in previously_selected_objects])
     else:
