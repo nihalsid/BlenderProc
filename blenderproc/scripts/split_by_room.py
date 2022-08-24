@@ -27,7 +27,7 @@ def process_room(front3d_root, scene_path, output_path):
         for folder in FOLDER_LIST:
             (output_path / f"{scene_path.stem}_{room}" / folder).mkdir(exist_ok=True)
 
-    for target_room_id in tqdm(valid_unique_room_ids, desc='room', color='green'):
+    for target_room_id in tqdm(valid_unique_room_ids, desc='room', colour='green'):
         target_frame_inds = np.argwhere(room_ids == target_room_id)
         current_room = room_labels[target_room_id]
 
